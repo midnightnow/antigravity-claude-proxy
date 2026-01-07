@@ -76,6 +76,7 @@ export const ANTIGRAVITY_DB_PATH = getAntigravityDbPath();
 
 export const DEFAULT_COOLDOWN_MS = 10 * 1000; // 10 second default cooldown
 export const MAX_RETRIES = 5; // Max retry attempts across accounts
+export const MAX_EMPTY_RESPONSE_RETRIES = 2; // Max retries for empty API responses
 export const MAX_ACCOUNTS = 10; // Maximum number of accounts allowed
 
 // Rate limit wait thresholds
@@ -166,6 +167,7 @@ export default {
     ANTIGRAVITY_DB_PATH,
     DEFAULT_COOLDOWN_MS,
     MAX_RETRIES,
+    MAX_EMPTY_RESPONSE_RETRIES,
     MAX_ACCOUNTS,
     MAX_WAIT_BEFORE_ERROR_MS,
     MIN_SIGNATURE_LENGTH,

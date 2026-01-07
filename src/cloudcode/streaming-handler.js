@@ -8,6 +8,7 @@
 import {
     ANTIGRAVITY_ENDPOINT_FALLBACKS,
     MAX_RETRIES,
+    MAX_EMPTY_RESPONSE_RETRIES,
     MAX_WAIT_BEFORE_ERROR_MS
 } from '../constants.js';
 import { isRateLimitError, isAuthError, isEmptyResponseError } from '../errors.js';
@@ -17,9 +18,7 @@ import { parseResetTime } from './rate-limit-parser.js';
 import { buildCloudCodeRequest, buildHeaders } from './request-builder.js';
 import { streamSSEResponse } from './sse-streamer.js';
 import { getFallbackModel } from '../fallback-config.js';
-
-// Maximum retries for empty responses before giving up
-const MAX_EMPTY_RETRIES = 2;
+import crypto from 'crypto';
 
 /**
  * Send a streaming request to Cloud Code with multi-account support
@@ -149,15 +148,15 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
                     let emptyRetries = 0;
                     let currentResponse = response;
 
-                    while (emptyRetries <= MAX_EMPTY_RETRIES) {
+                    while (emptyRetries <= MAX_EMPTY_RESPONSE_RETRIES) {
                         try {
                             yield* streamSSEResponse(currentResponse, anthropicRequest.model);
                             logger.debug('[CloudCode] Stream completed');
                             return;
                         } catch (streamError) {
-                            if (isEmptyResponseError(streamError) && emptyRetries < MAX_EMPTY_RETRIES) {
+                            if (isEmptyResponseError(streamError) && emptyRetries < MAX_EMPTY_RESPONSE_RETRIES) {
                                 emptyRetries++;
-                                logger.warn(`[CloudCode] Empty response, retry ${emptyRetries}/${MAX_EMPTY_RETRIES}...`);
+                                logger.warn(`[CloudCode] Empty response, retry ${emptyRetries}/${MAX_EMPTY_RESPONSE_RETRIES}...`);
 
                                 // Refetch the response
                                 currentResponse = await fetch(url, {
@@ -166,15 +165,38 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
                                     body: JSON.stringify(payload)
                                 });
 
+                                // Handle specific error codes on retry
                                 if (!currentResponse.ok) {
-                                    throw new Error(`Empty response retry failed: ${currentResponse.status}`);
+                                    const retryErrorText = await currentResponse.text();
+
+                                    // Re-throw rate limit errors to trigger account switch
+                                    if (currentResponse.status === 429) {
+                                        const resetMs = parseResetTime(currentResponse, retryErrorText);
+                                        throw new Error(`Rate limited during retry: ${retryErrorText}`);
+                                    }
+
+                                    // Re-throw auth errors for proper handling
+                                    if (currentResponse.status === 401) {
+                                        accountManager.clearTokenCache(account.email);
+                                        accountManager.clearProjectCache(account.email);
+                                        throw new Error(`Auth error during retry: ${retryErrorText}`);
+                                    }
+
+                                    // For 5xx errors, continue to next retry attempt
+                                    if (currentResponse.status >= 500) {
+                                        logger.warn(`[CloudCode] Retry got ${currentResponse.status}, continuing...`);
+                                        await sleep(1000);
+                                        continue;
+                                    }
+
+                                    throw new Error(`Empty response retry failed: ${currentResponse.status} - ${retryErrorText}`);
                                 }
                                 continue;
                             }
 
                             // After max retries, emit fallback message
                             if (isEmptyResponseError(streamError)) {
-                                logger.error(`[CloudCode] Empty response after ${MAX_EMPTY_RETRIES} retries`);
+                                logger.error(`[CloudCode] Empty response after ${MAX_EMPTY_RESPONSE_RETRIES} retries`);
                                 yield* emitEmptyResponseFallback(anthropicRequest.model);
                                 return;
                             }
@@ -245,7 +267,8 @@ export async function* sendMessageStream(anthropicRequest, accountManager, fallb
  * @yields {Object} Anthropic-format SSE events for empty response fallback
  */
 function* emitEmptyResponseFallback(model) {
-    const messageId = `msg_${Date.now()}_empty`;
+    // Use proper message ID format consistent with Anthropic API
+    const messageId = `msg_${crypto.randomBytes(16).toString('hex')}`;
 
     yield {
         type: 'message_start',
