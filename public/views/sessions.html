@@ -1,0 +1,156 @@
+<!-- Sessions View -->
+<div class="p-8 max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-white mb-2">Claude CLI Sessions</h1>
+        <p class="text-gray-400">Manage your active Claude Code terminal sessions</p>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div class="bg-space-900 border border-space-border rounded-lg p-4">
+            <div class="text-sm text-gray-500 mb-1">Total Sessions</div>
+            <div class="text-2xl font-bold text-white" x-text="stats.total">0</div>
+        </div>
+        <div class="bg-space-900 border border-neon-green/20 rounded-lg p-4">
+            <div class="text-sm text-gray-500 mb-1">Active</div>
+            <div class="text-2xl font-bold text-neon-green" x-text="stats.active">0</div>
+        </div>
+        <div class="bg-space-900 border border-yellow-500/20 rounded-lg p-4">
+            <div class="text-sm text-gray-500 mb-1">Idle</div>
+            <div class="text-2xl font-bold text-yellow-500" x-text="stats.idle">0</div>
+        </div>
+        <div class="bg-space-900 border border-red-500/20 rounded-lg p-4">
+            <div class="text-sm text-gray-500 mb-1">Errors</div>
+            <div class="text-2xl font-bold text-red-500" x-text="stats.error">0</div>
+        </div>
+    </div>
+
+    <!-- Sessions List -->
+    <div class="bg-space-900 border border-space-border rounded-lg overflow-hidden">
+        <div class="p-4 border-b border-space-border flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-white">Active Sessions</h2>
+            <button 
+                @click="launchCLI" 
+                :disabled="!cliInstalled || launching"
+                class="btn btn-sm btn-primary"
+                :class="{'loading': launching}">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                <span x-show="!launching">Launch New Session</span>
+                <span x-show="launching">Launching...</span>
+            </button>
+        </div>
+
+        <!-- Empty State -->
+        <template x-if="sessions.length === 0">
+            <div class="p-12 text-center">
+                <svg class="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                </svg>
+                <h3 class="text-lg font-semibold text-gray-400 mb-2">No Active Sessions</h3>
+                <p class="text-gray-600 mb-4">Launch a new Claude CLI session to get started</p>
+                <button 
+                    @click="launchCLI" 
+                    :disabled="!cliInstalled"
+                    class="btn btn-primary">
+                    Launch First Session
+                </button>
+            </div>
+        </template>
+
+        <!-- Sessions Table -->
+        <template x-if="sessions.length > 0">
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-space-800 text-gray-400 text-xs uppercase">
+                        <tr>
+                            <th class="px-6 py-3 text-left">Status</th>
+                            <th class="px-6 py-3 text-left">Name</th>
+                            <th class="px-6 py-3 text-left">Model</th>
+                            <th class="px-6 py-3 text-left">Requests</th>
+                            <th class="px-6 py-3 text-left">Created</th>
+                            <th class="px-6 py-3 text-left">Last Activity</th>
+                            <th class="px-6 py-3 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-space-border">
+                        <template x-for="session in sessions" :key="session.id">
+                            <tr class="hover:bg-space-850 transition-colors">
+                                <td class="px-6 py-4">
+                                    <div class="flex items-center gap-2">
+                                        <span 
+                                            class="text-lg" 
+                                            :class="getStatusColor(session.status)"
+                                            x-text="getStatusIcon(session.status)">
+                                        </span>
+                                        <span 
+                                            class="text-xs font-medium capitalize"
+                                            :class="getStatusColor(session.status)"
+                                            x-text="session.status">
+                                        </span>
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="font-medium text-white" x-text="session.name"></div>
+                                    <div class="text-xs text-gray-500">ID: <span x-text="session.id"></span></div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span class="text-sm text-gray-300 font-mono" x-text="session.model || '-'"></span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span class="text-sm text-gray-300" x-text="session.requestCount"></span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span class="text-sm text-gray-400" x-text="formatTime(session.createdAt)"></span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <span class="text-sm text-gray-400" x-text="formatTime(session.lastActivity)"></span>
+                                </td>
+                                <td class="px-6 py-4 text-right">
+                                    <div class="flex items-center justify-end gap-2">
+                                        <button 
+                                            @click="renameSession(session.id, session.name)"
+                                            class="btn btn-ghost btn-xs text-gray-400 hover:text-white"
+                                            title="Rename">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                            </svg>
+                                        </button>
+                                        <button 
+                                            @click="deleteSession(session.id)"
+                                            class="btn btn-ghost btn-xs text-gray-400 hover:text-red-500"
+                                            title="Delete">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </template>
+    </div>
+
+    <!-- CLI Not Installed Warning -->
+    <template x-if="!cliInstalled">
+        <div class="mt-6 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+            <div class="flex items-start gap-3">
+                <svg class="w-5 h-5 text-yellow-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+                <div>
+                    <h4 class="font-semibold text-yellow-500 mb-1">Claude CLI Not Installed</h4>
+                    <p class="text-sm text-gray-400">Install the Claude CLI to launch terminal sessions:</p>
+                    <code class="block mt-2 p-2 bg-black/50 rounded text-xs text-gray-300 font-mono">
+                        npm install -g @anthropic-ai/claude-cli
+                    </code>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>

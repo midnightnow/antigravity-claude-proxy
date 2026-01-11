@@ -13,6 +13,7 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('accountManager', window.Components.accountManager);
     Alpine.data('claudeConfig', window.Components.claudeConfig);
     Alpine.data('logsViewer', window.Components.logsViewer);
+    Alpine.data('sessions', window.Components.sessions);
 
     // View Loader Directive
     Alpine.directive('load-view', (el, { expression }, { evaluate }) => {
@@ -77,6 +78,82 @@ document.addEventListener('alpine:init', () => {
 
             // Initial Fetch
             Alpine.store('data').fetchData();
+
+            // === WebSocket Connection for Live Monitoring ===
+            this.connectWebSocket();
+        },
+
+        // WebSocket connection
+        ws: null,
+
+        connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+            try {
+                this.ws = new WebSocket(wsUrl);
+
+                this.ws.onopen = () => {
+                    console.log('[WebSocket] Connected');
+                    Alpine.store('global').connectionStatus = 'connected';
+                };
+
+                this.ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        console.log('[WebSocket] Message:', data);
+
+                        // You can add live monitoring UI updates here
+                        // For now, just log to console
+                    } catch (error) {
+                        console.error('[WebSocket] Failed to parse message:', error);
+                    }
+                };
+
+                this.ws.onerror = (error) => {
+                    console.error('[WebSocket] Error:', error);
+                    Alpine.store('global').connectionStatus = 'disconnected';
+                };
+
+                this.ws.onclose = () => {
+                    console.log('[WebSocket] Disconnected, reconnecting in 5s...');
+                    Alpine.store('global').connectionStatus = 'connecting';
+                    setTimeout(() => this.connectWebSocket(), 5000);
+                };
+            } catch (error) {
+                console.error('[WebSocket] Failed to connect:', error);
+                Alpine.store('global').connectionStatus = 'disconnected';
+            }
+        },
+
+        // CLI Launcher
+        launching: false,
+
+        async launchCLI() {
+            this.launching = true;
+            try {
+                const response = await fetch('/cli/launch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: `Session ${Date.now()}`,
+                        port: 8080
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    Alpine.store('global').showToast('Terminal launched successfully!', 'success');
+                } else {
+                    Alpine.store('global').showToast(data.error || 'Failed to launch terminal', 'error');
+                }
+            } catch (error) {
+                console.error('Failed to launch CLI:', error);
+                Alpine.store('global').showToast('Failed to launch terminal', 'error');
+            } finally {
+                this.launching = false;
+            }
         },
 
         refreshTimer: null,

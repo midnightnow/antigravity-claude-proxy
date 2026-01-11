@@ -17,6 +17,10 @@ import os from 'os';
 import { setupGracefulShutdown, onShutdown } from './utils/graceful-shutdown.js';
 import { startBackgroundRefresh, stopBackgroundRefresh } from './utils/proactive-token-refresh.js';
 
+// WebSocket and Session Management
+import { initWebSocket, closeWebSocket } from './websocket-server.js';
+import { startAutoCleanup, stopAutoCleanup, stopIdleCheck } from './session-manager.js';
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 const isDebug = args.includes('--debug') || process.env.DEBUG === 'true';
@@ -114,12 +118,30 @@ ${border}    ${align4(`export ANTHROPIC_BASE_URL=http://localhost:${PORT}`)}${bo
         logger.warn('Running in DEBUG mode - verbose logs enabled');
     }
 
+    // === Initialize WebSocket Server ===
+    initWebSocket(server);
+
+    // === Start Session Manager ===
+    startAutoCleanup();
+    logger.info('[SessionManager] Auto-cleanup started');
+
     // === Security: Set up graceful shutdown (Remediation 2026-01) ===
     setupGracefulShutdown(server);
 
     // Register cleanup callback for background token refresh
     onShutdown('token-refresh', () => {
         stopBackgroundRefresh();
+    });
+
+    // Register cleanup callback for WebSocket
+    onShutdown('websocket', () => {
+        closeWebSocket();
+    });
+
+    // Register cleanup callback for session manager
+    onShutdown('session-manager', () => {
+        stopAutoCleanup();
+        stopIdleCheck();
     });
 
     logger.info('[Security] Graceful shutdown handlers registered');

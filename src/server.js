@@ -34,6 +34,13 @@ import { createSafeErrorResponse, sanitizeAccountForResponse, sanitizeErrorMessa
 import { setupGracefulShutdown, onShutdown } from './utils/graceful-shutdown.js';
 import { startBackgroundRefresh, stopBackgroundRefresh } from './utils/proactive-token-refresh.js';
 
+// CLI Launcher and Session Management
+import { detectCLI, launchCLI, getManualCommands } from './cli-launcher.js';
+import * as sessionManager from './session-manager.js';
+
+// WebSocket for live monitoring
+import { broadcastRequest, broadcastResponse, broadcastError } from './websocket-server.js';
+
 // Parse fallback flag directly from command line args to avoid circular dependency
 const args = process.argv.slice(2);
 const FALLBACK_ENABLED = args.includes('--fallback') || process.env.FALLBACK === 'true';
@@ -157,7 +164,7 @@ app.use((req, res, next) => {
     // Skip logging for event logging batch unless in debug mode
     if (req.path === '/api/event_logging/batch') {
         if (logger.isDebugEnabled) {
-             logger.debug(`[${req.method}] ${req.path}`);
+            logger.debug(`[${req.method}] ${req.path}`);
         }
     } else {
         logger.info(`[${req.method}] ${req.path}`);
@@ -683,6 +690,17 @@ app.post('/v1/messages', async (req, res) => {
         // Ensure account manager is initialized
         await ensureInitialized();
 
+        // === Model Mapping (must happen BEFORE validation) ===
+        // Apply model mapping to translate incoming model names to valid ones
+        if (req.body.model) {
+            const modelMapping = config.modelMapping || {};
+            if (modelMapping[req.body.model] && modelMapping[req.body.model].mapping) {
+                const originalModel = req.body.model;
+                req.body.model = modelMapping[req.body.model].mapping;
+                logger.info(`[Server] Mapping model ${originalModel} -> ${req.body.model}`);
+            }
+        }
+
         // === Input Validation (Security Remediation 2026-01) ===
         // Validates request structure, model whitelist, and blocks prototype pollution
         const validation = validateMessages(req.body);
@@ -711,16 +729,7 @@ app.post('/v1/messages', async (req, res) => {
             temperature
         } = validation.data; // Use validated/sanitized data
 
-        // Resolve model mapping if configured
-        let requestedModel = model || 'claude-3-5-sonnet-20241022';
-        const modelMapping = config.modelMapping || {};
-        if (modelMapping[requestedModel] && modelMapping[requestedModel].mapping) {
-            const targetModel = modelMapping[requestedModel].mapping;
-            logger.info(`[Server] Mapping model ${requestedModel} -> ${targetModel}`);
-            requestedModel = targetModel;
-        }
-
-        const modelId = requestedModel;
+        const modelId = model || 'claude-3-5-sonnet-20241022';
 
         // Optimistic Retry: If ALL accounts are rate-limited for this model, reset them to force a fresh check.
         // If we have some available accounts, we try them first.
@@ -745,6 +754,13 @@ app.post('/v1/messages', async (req, res) => {
         };
 
         logger.info(`[API] Request for model: ${request.model}, stream: ${!!stream}`);
+
+        // === Session Tracking ===
+        const session = sessionManager.detectOrCreateSession(req);
+        sessionManager.updateSessionActivity(session.id, request.model);
+
+        // === WebSocket Broadcasting ===
+        broadcastRequest(request.model, '/v1/messages');
 
         // Debug: Log message structure to diagnose tool_use/tool_result ordering
         if (logger.isDebugEnabled) {
@@ -776,10 +792,17 @@ app.post('/v1/messages', async (req, res) => {
                 }
                 res.end();
 
+                // Broadcast successful response
+                broadcastResponse(200, request.model);
+
             } catch (streamError) {
                 logger.error('[API] Stream error:', streamError);
 
                 const { errorType, errorMessage } = parseError(streamError);
+
+                // Broadcast error
+                broadcastError(streamError, 'streaming');
+                sessionManager.recordSessionError(session.id, streamError);
 
                 res.write(`event: error\ndata: ${JSON.stringify({
                     type: 'error',
@@ -792,6 +815,9 @@ app.post('/v1/messages', async (req, res) => {
             // Handle non-streaming response
             const response = await sendMessage(request, accountManager, FALLBACK_ENABLED);
             res.json(response);
+
+            // Broadcast successful response
+            broadcastResponse(200, request.model);
         }
 
     } catch (error) {
@@ -842,6 +868,12 @@ app.post('/v1/messages', async (req, res) => {
 
         logger.warn(`[API] Returning error response: ${statusCode} ${errorType} - ${errorMessage}`);
 
+        // Broadcast error and record in session
+        broadcastError(error, errorType);
+        if (session) {
+            sessionManager.recordSessionError(session.id, error);
+        }
+
         // Check if headers have already been sent (for streaming that failed mid-way)
         if (res.headersSent) {
             logger.warn('[API] Headers already sent, writing error as SSE event');
@@ -859,6 +891,158 @@ app.post('/v1/messages', async (req, res) => {
                 }
             });
         }
+    }
+});
+
+/**
+ * CLI Launcher Endpoints
+ */
+
+// Detect if Claude CLI is installed
+app.get('/cli/detect', async (req, res) => {
+    try {
+        const result = await detectCLI();
+        res.json(result);
+    } catch (error) {
+        logger.error('[API] CLI detection failed:', error);
+        res.status(500).json({
+            installed: false,
+            error: error.message
+        });
+    }
+});
+
+// Launch Claude CLI in new terminal
+app.post('/cli/launch', async (req, res) => {
+    try {
+        const port = req.body.port || 8080;
+        const result = await launchCLI(port);
+
+        // Create a new session
+        const session = sessionManager.createSession(req.body.name);
+
+        res.json({
+            ...result,
+            session: {
+                id: session.id,
+                name: session.name
+            }
+        });
+    } catch (error) {
+        logger.error('[API] CLI launch failed:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Get manual setup commands
+app.get('/cli/commands', (req, res) => {
+    try {
+        const port = req.query.port || 8080;
+        const commands = getManualCommands(port);
+        res.json(commands);
+    } catch (error) {
+        logger.error('[API] Failed to get commands:', error);
+        res.status(500).json({
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Session Management Endpoints
+ */
+
+// Get all sessions
+app.get('/sessions', (req, res) => {
+    try {
+        const sessions = sessionManager.getAllSessions();
+        const stats = sessionManager.getSessionStats();
+        res.json({
+            sessions,
+            stats
+        });
+    } catch (error) {
+        logger.error('[API] Failed to get sessions:', error);
+        res.status(500).json({
+            error: error.message
+        });
+    }
+});
+
+// Get specific session
+app.get('/sessions/:id', (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const session = sessionManager.getSession(id);
+
+        if (!session) {
+            return res.status(404).json({
+                error: 'Session not found'
+            });
+        }
+
+        res.json(session);
+    } catch (error) {
+        logger.error('[API] Failed to get session:', error);
+        res.status(500).json({
+            error: error.message
+        });
+    }
+});
+
+// Update session name
+app.patch('/sessions/:id', (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const { name } = req.body;
+
+        if (!name) {
+            return res.status(400).json({
+                error: 'Name is required'
+            });
+        }
+
+        const session = sessionManager.updateSessionName(id, name);
+
+        if (!session) {
+            return res.status(404).json({
+                error: 'Session not found'
+            });
+        }
+
+        res.json(session);
+    } catch (error) {
+        logger.error('[API] Failed to update session:', error);
+        res.status(500).json({
+            error: error.message
+        });
+    }
+});
+
+// Delete session
+app.delete('/sessions/:id', (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const deleted = sessionManager.deleteSession(id);
+
+        if (!deleted) {
+            return res.status(404).json({
+                error: 'Session not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Session deleted'
+        });
+    } catch (error) {
+        logger.error('[API] Failed to delete session:', error);
+        res.status(500).json({
+            error: error.message
+        });
     }
 });
 

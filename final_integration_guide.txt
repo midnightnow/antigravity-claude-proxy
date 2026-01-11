@@ -1,0 +1,449 @@
+# 🚀 Antigravity Claude App - Quick Start Guide
+
+This guide adds **one-click terminal launching** and **live session monitoring** to your existing `antigravity-claude-proxy`.
+
+---
+
+## 📦 What You're Adding
+
+- **🖥️ One-Click Launch**: Browser button that spawns Claude CLI terminals
+- **📊 Live Monitor**: Real-time WebSocket streaming of proxy traffic
+- **✓ CLI Detection**: Automatic validation of Claude CLI installation
+- **🌐 Cross-Platform**: Works on macOS, Linux, and Windows
+- **📋 Manual Setup**: Auto-generated shell commands for copy-paste
+
+---
+
+## ⚡ Installation (3 Steps)
+
+### Step 1: Add the Launcher Module
+
+Create `src/launcher.js` and paste the **"Production Terminal Launcher"** code.
+
+```bash
+# From your repo root
+touch src/launcher.js
+# Copy content from artifact above
+```
+
+### Step 2: Update Your Server
+
+Open `src/server.js` and add these sections:
+
+#### a) Import the launcher (top of file)
+```javascript
+const ClaudeTerminalLauncher = require('./launcher');
+const WebSocket = require('ws');
+```
+
+#### b) Add WebSocket setup (after `server` is created)
+```javascript
+const wss = new WebSocket.Server({ noServer: true });
+const wsClients = new Set();
+
+wss.on('connection', (ws) => {
+    wsClients.add(ws);
+    console.log('[WS] Client connected');
+    
+    ws.send(JSON.stringify({
+        type: 'sys',
+        msg: 'Connected to Antigravity Proxy',
+        timestamp: new Date().toISOString()
+    }));
+    
+    ws.on('close', () => {
+        wsClients.delete(ws);
+    });
+});
+
+function broadcast(data) {
+    const message = JSON.stringify({
+        ...data,
+        timestamp: data.timestamp || new Date().toISOString()
+    });
+    wsClients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
+        }
+    });
+}
+
+server.on('upgrade', (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+    });
+});
+```
+
+#### c) Initialize launcher
+```javascript
+const launcher = new ClaudeTerminalLauncher({
+    baseUrl: `http://localhost:${PORT || 8080}`,
+    apiKey: 'antigravity',
+    defaultModel: 'claude-opus-4-5-thinking'
+});
+```
+
+#### d) Add API endpoints
+```javascript
+// Launch terminal
+app.post('/api/launch', async (req, res) => {
+    try {
+        broadcast({ type: 'sys', msg: '🚀 Launching terminal...' });
+        const result = await launcher.launch();
+        broadcast({ type: 'sys', msg: `✓ Launched on ${result.platform}` });
+        res.json({ success: true, platform: result.platform });
+    } catch (error) {
+        broadcast({ type: 'error', msg: error.message });
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            instructions: launcher.getManualInstructions()
+        });
+    }
+});
+
+// Validate CLI
+app.get('/api/validate-cli', async (req, res) => {
+    const installed = await launcher.validateClaudeCLI();
+    res.json({
+        installed,
+        system: launcher.getSystemInfo(),
+        message: installed 
+            ? 'Claude CLI ready' 
+            : 'Install with: npm install -g @anthropic-ai/claude-cli'
+    });
+});
+
+// Setup instructions
+app.get('/api/setup-instructions', (req, res) => {
+    res.json(launcher.getManualInstructions());
+});
+```
+
+#### e) Add monitoring middleware (BEFORE your proxy routes)
+```javascript
+app.use((req, res, next) => {
+    if (req.path.startsWith('/v1/')) {
+        broadcast({
+            type: 'request',
+            model: req.body?.model || 'unknown',
+            path: req.path
+        });
+        
+        const originalSend = res.send;
+        res.send = function(data) {
+            broadcast({
+                type: 'response',
+                status: res.statusCode,
+                path: req.path
+            });
+            originalSend.apply(res, arguments);
+        };
+    }
+    next();
+});
+```
+
+### Step 3: Replace Your Dashboard
+
+Replace `public/index.html` with the **"Complete Dashboard"** code from the artifact above.
+
+Or if you want to keep your existing dashboard, add the launcher section to it:
+1. Copy the launcher HTML section
+2. Copy the JavaScript functions
+3. Copy the CSS styles
+4. Integrate into your existing layout
+
+---
+
+## 🧪 Testing
+
+### 1. Install Dependencies (if needed)
+
+```bash
+npm install ws
+```
+
+### 2. Start Your Server
+
+```bash
+npm start
+# or
+antigravity-claude-proxy start
+```
+
+You should see:
+```
+[Launcher] ✓ Claude CLI detected
+Proxy running on http://localhost:8080
+```
+
+### 3. Open the Dashboard
+
+```bash
+open http://localhost:8080
+# or visit in browser
+```
+
+### 4. Verify the Interface
+
+You should see:
+- ✅ "CLI Status: Installed ✓" (green dot)
+- ✅ Platform detected (macOS/Linux/Windows)
+- ✅ "WebSocket: Connected" (green dot)
+- ✅ Live monitor showing "Waiting for connection..."
+
+### 5. Launch a Terminal
+
+Click the **"Launch Claude Code CLI"** button.
+
+**Expected result:**
+- New terminal window opens
+- Shows "Antigravity Proxy Connected" banner
+- Claude CLI starts automatically
+- Dashboard shows "Terminal launched on darwin/linux/win32"
+
+### 6. Test the Monitor
+
+In the spawned terminal, type a message to Claude:
+```
+Hello!
+```
+
+**Expected result:**
+- Dashboard monitor shows:
+  ```
+  [12:34:56] Routing to claude-opus-4-5-thinking...
+  [12:34:57] Response: 200
+  ```
+
+---
+
+## 🎯 Usage Scenarios
+
+### Scenario 1: Quick Testing
+```
+Open dashboard → Click "Launch" → Terminal opens → Start chatting
+```
+Perfect for: Testing new features, quick queries
+
+### Scenario 2: Multiple Sessions
+```
+Click "Launch" 3 times → 3 independent terminals
+Each routes through same proxy
+Monitor shows all traffic
+```
+Perfect for: Parallel work, A/B testing prompts
+
+### Scenario 3: Manual Setup (SSH/Docker)
+```
+Click "📋 Manual Setup" → Copy commands → Paste in remote terminal
+```
+Perfect for: Remote servers, Docker containers
+
+---
+
+## 🔧 Troubleshooting
+
+### "CLI Status: Not Found"
+
+**Problem:** Claude CLI not installed
+
+**Fix:**
+```bash
+npm install -g @anthropic-ai/claude-cli
+```
+
+Then refresh the dashboard.
+
+### Terminal Doesn't Open
+
+**macOS:**
+- Make sure Terminal.app is allowed to run scripts
+- System Preferences → Security & Privacy → Accessibility
+
+**Linux:**
+- Install a terminal emulator:
+  ```bash
+  sudo apt install gnome-terminal
+  # or
+  sudo apt install xterm
+  ```
+
+**Windows:**
+- Ensure `cmd.exe` is available (it should be by default)
+
+### WebSocket Won't Connect
+
+**Check your server logs for:**
+```
+[WS] Client connected
+```
+
+**If missing:**
+1. Make sure you added the WebSocket upgrade handler
+2. Check firewall isn't blocking WebSocket connections
+3. Try restarting the server
+
+### Monitor Shows No Traffic
+
+**Make sure:**
+1. Terminal was launched via the dashboard button
+2. You're actually using Claude CLI (not just typing `claude --version`)
+3. The monitoring middleware is BEFORE your proxy routes
+
+**Debug by adding:**
+```javascript
+console.log('[Monitor] Middleware active');
+```
+
+---
+
+## 🎨 Customization
+
+### Change Default Model
+
+Edit `src/server.js` launcher initialization:
+```javascript
+const launcher = new ClaudeTerminalLauncher({
+    baseUrl: `http://localhost:${PORT}`,
+    apiKey: 'antigravity',
+    defaultModel: 'gemini-3-pro-high[1m]', // ← Change this
+    port: PORT
+});
+```
+
+### Add Credit Tracking
+
+Enhance the monitoring middleware:
+```javascript
+app.use((req, res, next) => {
+    if (req.path.startsWith('/v1/')) {
+        const startTime = Date.now();
+        
+        broadcast({
+            type: 'request',
+            model: req.body?.model,
+            messageCount: req.body?.messages?.length,
+            path: req.path
+        });
+        
+        const originalSend = res.send;
+        res.send = function(data) {
+            const duration = Date.now() - startTime;
+            const responseData = JSON.parse(data);
+            
+            broadcast({
+                type: 'response',
+                status: res.statusCode,
+                duration: `${duration}ms`,
+                usage: responseData.usage, // ← Add token usage
+                path: req.path
+            });
+            
+            originalSend.apply(res, arguments);
+        };
+    }
+    next();
+});
+```
+
+### Custom Launch Banner
+
+Edit `src/launcher.js` `buildCommand()` method:
+```javascript
+const banner = [
+    'echo "╔════════════════════════════════════════╗"',
+    'echo "║   🚀 Your Custom Banner Here          ║"',
+    'echo "╚════════════════════════════════════════╝"',
+    'echo "📡 Proxy: $ANTHROPIC_BASE_URL"',
+    'echo ""'
+].join(' && ');
+```
+
+---
+
+## 📊 What Gets Monitored
+
+The dashboard tracks:
+
+| Event Type | What It Shows |
+|------------|---------------|
+| **request** | Model name, timestamp, path |
+| **response** | Status code, duration (if added) |
+| **sys** | System messages (launches, connections) |
+| **error** | Error messages from server/launcher |
+| **log** | Custom log messages you broadcast |
+
+---
+
+## 🚀 Next Level Features
+
+Want to go further? Here are some ideas:
+
+### 1. Session Management
+Track active CLI sessions by PID and show them in the dashboard
+
+### 2. Model Switcher
+Add a dropdown to change models before launching
+
+### 3. Usage Analytics
+Store and visualize credit usage over time
+
+### 4. Multi-Proxy Support
+Support multiple proxy servers with different configurations
+
+### 5. SSH Launcher
+Generate SSH commands for remote server setup
+
+---
+
+## ✅ Verification Checklist
+
+After installation, you should be able to:
+
+- [x] See dashboard at `http://localhost:8080`
+- [x] CLI Status shows "Installed ✓"
+- [x] WebSocket shows "Connected"
+- [x] Click "Launch" opens new terminal
+- [x] Terminal shows Antigravity banner
+- [x] Claude CLI starts automatically
+- [x] Monitor shows request/response events
+- [x] Manual setup modal shows correct commands
+- [x] Multiple terminals can be launched
+- [x] All terminals route through same proxy
+
+---
+
+## 💡 Pro Tips
+
+1. **Keep proxy running** when using launched terminals
+2. **Use separate terminal** for the proxy server itself
+3. **Check logs** if WebSocket connection drops
+4. **Multiple instances** work independently
+5. **Manual setup** is great for persistent config
+
+---
+
+## 🎉 You're Done!
+
+You now have a **professional Antigravity Claude App** with:
+- One-click terminal launching
+- Live monitoring dashboard
+- Cross-platform support
+- Automatic environment configuration
+
+Enjoy your seamless Claude CLI experience with Antigravity credits! 🚀
+
+---
+
+## 📞 Need Help?
+
+If you run into issues:
+1. Check the troubleshooting section above
+2. Review your server logs
+3. Verify WebSocket connection in browser console
+4. Test manual commands first to isolate the issue
+
+The integration is designed to be robust, but every system is unique. The manual setup option ensures you always have a fallback!
