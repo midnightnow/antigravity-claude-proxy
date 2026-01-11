@@ -200,6 +200,18 @@ export function detectOrCreateSession(req) {
 }
 
 /**
+ * Get session by request (idempotent, returns null if not found)
+ */
+export function getSessionByRequest(req) {
+    const sessionId = req.headers['x-session-id'];
+    if (sessionId) {
+        const id = parseInt(sessionId, 10);
+        return sessions.get(id) || null;
+    }
+    return null;
+}
+
+/**
  * Start auto-cleanup interval (runs every 30 minutes)
  */
 let cleanupInterval = null;

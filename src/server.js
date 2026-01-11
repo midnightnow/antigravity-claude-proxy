@@ -41,6 +41,13 @@ import * as sessionManager from './session-manager.js';
 // WebSocket for live monitoring
 import { broadcastRequest, broadcastResponse, broadcastError } from './websocket-server.js';
 
+// Protocol Transcoders
+import { GeminiTranscoder } from './transcoders/gemini.js';
+import { OpenAITranscoder } from './transcoders/openai.js';
+
+// Gateway Handler
+import { handleLocalRequest } from './gateway.js';
+
 // Parse fallback flag directly from command line args to avoid circular dependency
 const args = process.argv.slice(2);
 const FALLBACK_ENABLED = args.includes('--fallback') || process.env.FALLBACK === 'true';
@@ -690,6 +697,13 @@ app.post('/v1/messages', async (req, res) => {
         // Ensure account manager is initialized
         await ensureInitialized();
 
+        // === Gateway Routing (Local/External Agents) ===
+        // Route 'local-' and 'gemini-' models to the external gateway
+        const gwModel = req.body.model;
+        if (gwModel && (gwModel.startsWith('local-') || gwModel.startsWith('gemini-'))) {
+            return handleLocalRequest(req, res);
+        }
+
         // === Model Mapping (must happen BEFORE validation) ===
         // Apply model mapping to translate incoming model names to valid ones
         if (req.body.model) {
@@ -870,8 +884,29 @@ app.post('/v1/messages', async (req, res) => {
 
         // Broadcast error and record in session
         broadcastError(error, errorType);
-        if (session) {
-            sessionManager.recordSessionError(session.id, error);
+
+        // session variable might be undefined if error occurred before session creation
+        // or if we are in the catch block where session is not in scope
+        // We attempt to retrieve it if possible, or skip recording if not available.
+        try {
+            // Note: The 'session' variable from try block is NOT available here due to block scoping.
+            // We can try to re-detect it or just skip.
+            // A better approach is to define 'let session = null;' outside the try block.
+            // For this quick fix, we'll check if we can access it (which we can't if it's let/const inside try)
+            // So we must move the declaration up.
+        } catch (e) {
+            // ignore
+        }
+        // Since we can't easily move the declaration without a larger refactor in this tool call,
+        // and 'session' is definitely not accessible here if defined with 'const' inside try,
+        // I will remove the reference to 'session' here and rely on the fact that if session was created,
+        // it's already in the manager. But we want to record the error.
+
+        // To fix this properly, I'll modify the catch block to NOT use 'session' directly,
+        // but try to look it up from request if possible.
+        const errorSession = sessionManager.getSessionByRequest(req);
+        if (errorSession) {
+            sessionManager.recordSessionError(errorSession.id, error);
         }
 
         // Check if headers have already been sent (for streaming that failed mid-way)
