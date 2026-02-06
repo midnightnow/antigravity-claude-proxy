@@ -25,6 +25,8 @@ data/
 tests/utils/*.png
 tests/utils/*.jpg
 tests/utils/*.jpeg
+test-results/
+playwright-report/
 
 # Environment
 .env
@@ -33,3 +35,17 @@ tests/utils/*.jpeg
 # Build output
 dist/
 build/
+
+# Agent artifacts
+.agent/
+bullrider/
+
+# Development scripts
+launch.sh
+shim.js
+bin/clyde
+
+# Temporary files
+*.tmp
+*.swp
+*~

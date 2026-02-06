@@ -18,32 +18,27 @@ import { logger } from './logger.js';
 // =============================================================================
 
 /**
- * Whitelist of allowed model names
- * Models not in this list will be rejected
+ * Check if a model name is allowed based on prefixes
+ * @param {string} modelId - Model ID to check
+ * @returns {boolean} True if model matches an allowed prefix
  */
-const ALLOWED_MODELS = [
-    // Claude thinking models
-    'claude-sonnet-4-5-thinking',
-    'claude-opus-4-5-thinking',
+function isAllowedModel(modelId) {
+    if (!modelId || typeof modelId !== 'string') return false;
+    const lower = modelId.toLowerCase();
 
-    // Claude standard models
-    'claude-sonnet-4-5',
-    'claude-3-5-sonnet-20241022',
-    'claude-3-opus-20240229',
-    'claude-3-sonnet-20240229',
-    'claude-3-haiku-20240307',
+    const allowedPrefixes = [
+        'claude-',
+        'gemini-',
+        'gpt-os-',
+        'gpt-4-',
+        'local-',
+        'lmstudio-',
+        'deepseek-',
+        'qwen-'
+    ];
 
-    // Gemini models
-    'gemini-3-flash',
-    'gemini-3-pro-low',
-    'gemini-3-pro-high',
-    'gemini-2.5-flash-lite',
-
-    // Extended context variants
-    'gemini-2.5-flash-lite[1m]',
-    'gemini-3-flash[1m]',
-    'gemini-3-pro-high[1m]'
-];
+    return allowedPrefixes.some(prefix => lower.startsWith(prefix));
+}
 
 /**
  * Validation limits to prevent resource exhaustion
@@ -410,8 +405,8 @@ export function validateMessages(body) {
     if (body.model !== undefined) {
         if (typeof body.model !== 'string') {
             errors.push('model must be a string');
-        } else if (!ALLOWED_MODELS.includes(body.model)) {
-            errors.push(`model '${body.model}' is not allowed. Valid models: ${ALLOWED_MODELS.slice(0, 5).join(', ')}...`);
+        } else if (!isAllowedModel(body.model)) {
+            errors.push(`model '${body.model}' is not allowed.`);
         }
     }
 
@@ -512,21 +507,11 @@ export function validateMessages(body) {
 }
 
 /**
- * Get the list of allowed models
- * @returns {string[]}
- */
-export function getAllowedModels() {
-    return [...ALLOWED_MODELS];
-}
-
-/**
  * Check if a model is in the allowed list
  * @param {string} model
  * @returns {boolean}
  */
-export function isAllowedModel(model) {
-    return ALLOWED_MODELS.includes(model);
-}
+export { isAllowedModel };
 
 /**
  * Get validation limits
@@ -538,7 +523,6 @@ export function getLimits() {
 
 export default {
     validateMessages,
-    getAllowedModels,
     isAllowedModel,
     getLimits,
     LIMITS

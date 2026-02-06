@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Terminal Launcher</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 100%);
+            color: #e0e0e0;
+            padding: 40px;
+            margin: 0;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 40px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            font-size: 2em;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 8px;
+            font-size: 1.1em;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s;
+            margin: 10px 5px;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.5);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .alert.success {
+            background: rgba(81, 207, 102, 0.2);
+            color: #51cf66;
+        }
+
+        .alert.error {
+            background: rgba(255, 107, 107, 0.2);
+            color: #ff6b6b;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .info-card {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .info-label {
+            color: #a0a0a0;
+            font-size: 0.9em;
+        }
+
+        .info-value {
+            color: #ffffff;
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🚀 Claude Terminal Launcher</h1>
+        <p style="color: #a0a0a0; margin-bottom: 30px;">
+            Launch pre-configured Claude CLI sessions using your Antigravity proxy
+        </p>
+
+        <div class="status">
+            <div>
+                <strong>CLI Status:</strong>
+                <span id="cliStatus" style="color: #ffd43b;">Checking...</span>
+            </div>
+            <div>
+                <strong>Proxy:</strong>
+                <span style="color: #51cf66;">localhost:8080</span>
+            </div>
+        </div>
+
+        <div class="info-grid">
+            <div class="info-card">
+                <div class="info-label">Proxy URL</div>
+                <div class="info-value">localhost:8080</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Startup Model</div>
+                <div class="info-value">
+                    <select id="modelSelect"
+                        class="bg-transparent border-none text-white font-bold w-full focus:outline-none cursor-pointer"
+                        style="font-size: 1em;">
+                        <optgroup label="⚡ SPEED & ECONOMY (Recommended)">
+                            <option value="gemini-3.0-flash" selected>Gemini 3.0 Flash (Default - Free)</option>
+                            <option value="gemini-2.0-flash">Gemini 2.0 Flash (Legacy - Free)</option>
+                            <option value="local-gemma">Local Gemma 2 (Offline - Free)</option>
+                        </optgroup>
+                        <optgroup label="🧠 HIGH REASONING">
+                            <option value="gemini-3.0-pro">Gemini 3.0 Pro (Thinking)</option>
+                            <option value="deepseek-r1">DeepSeek R1 (Local/Distill)</option>
+                            <option value="claude-opus-4-5-thinking">Antigravity Opus 4.5 ($$$)</option>
+                        </optgroup>
+                        <optgroup label="🛠️ CODING SPECIALISTS">
+                            <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (Standard)</option>
+                            <option value="qwen-2.5-coder">Qwen 2.5 Coder (Local)</option>
+                        </optgroup>
+                    </select>
+                </div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Auth Token</div>
+                <div class="info-value">dummy</div>
+            </div>
+        </div>
+
+        <div id="alertBox" class="alert"></div>
+
+        <button id="launchBtn" class="btn" onclick="launchTerminal()">
+            Launch Claude CLI
+        </button>
+
+        <button class="btn btn-secondary" onclick="showInstructions()">
+            Manual Setup
+        </button>
+
+        <a href="/" class="btn btn-secondary" style="text-decoration: none; display: inline-block;">
+            Back to Dashboard
+        </a>
+
+        <div id="instructions"
+            style="display: none; margin-top: 30px; background: rgba(0,0,0,0.3); padding: 20px; border-radius: 8px;">
+            <h3>Manual Setup Commands</h3>
+            <pre id="instructionsContent" style="color: #51cf66; overflow-x: auto;"></pre>
+        </div>
+    </div>
+
+    <script>
+        async function checkCLI() {
+            try {
+                const response = await fetch('/api/validate-cli');
+                const data = await response.json();
+
+                const cliStatus = document.getElementById('cliStatus');
+                const launchBtn = document.getElementById('launchBtn');
+
+                if (data.installed) {
+                    cliStatus.textContent = 'Installed ✓';
+                    cliStatus.style.color = '#51cf66';
+                    launchBtn.disabled = false;
+                } else {
+                    cliStatus.textContent = 'Not Found';
+                    cliStatus.style.color = '#ff6b6b';
+                    launchBtn.disabled = true;
+                    showAlert('error', data.message);
+                }
+            } catch (error) {
+                console.error('Failed to check CLI:', error);
+            }
+        }
+
+        async function launchTerminal() {
+            const btn = document.getElementById('launchBtn');
+            const model = document.getElementById('modelSelect').value;
+            const originalText = btn.textContent;
+
+            btn.disabled = true;
+            btn.textContent = 'Launching...';
+
+            try {
+                const response = await fetch('/api/launch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert('success', '✓ Terminal launched! Check your terminal application.');
+                } else {
+                    showAlert('error', `Failed: ${result.error}`);
+                }
+            } catch (error) {
+                showAlert('error', `Error: ${error.message}`);
+            } finally {
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                }, 2000);
+            }
+        }
+
+        async function showInstructions() {
+            try {
+                const response = await fetch('/api/setup-instructions');
+                const data = await response.json();
+
+                const content = document.getElementById('instructionsContent');
+                content.textContent = data.commands.join('\n');
+
+                document.getElementById('instructions').style.display = 'block';
+            } catch (error) {
+                console.error('Failed to fetch instructions:', error);
+            }
+        }
+
+        function showAlert(type, message) {
+            const alertBox = document.getElementById('alertBox');
+            alertBox.className = `alert ${type}`;
+            alertBox.textContent = message;
+            alertBox.style.display = 'block';
+
+            setTimeout(() => {
+                alertBox.style.display = 'none';
+            }, 5000);
+        }
+
+        // Initialize
+        checkCLI();
+    </script>
+</body>
+
+</html>

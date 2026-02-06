@@ -519,6 +519,10 @@ document.addEventListener('alpine:init', () => {
             cancel: null
         },
 
+        // Live Traffic Monitor
+        liveEvents: [],
+        maxLiveEvents: 50,
+
         t(key, params = {}) {
             let str = this.translations[this.lang][key] || key;
             if (typeof str === 'string') {

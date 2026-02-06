@@ -1,75 +1,54 @@
 /**
- * Express Server - Anthropic-compatible API
- * Proxies to Google Cloud Code via Antigravity
- * Supports multi-account load balancing
+ * Express Server - Antigravity Claude Proxy
+ * Deep Code Review & Refactor (Remediation 2026-02)
  *
- * Security Features (Remediation 2026-01):
- * - Input validation with prototype pollution protection
- * - Error message sanitization
- * - Request timeouts
- * - Graceful shutdown
- * - Proactive token refresh
+ * This version uses modular routing to reduce bloat and improve maintainability.
  */
 
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { sendMessage, sendMessageStream, listModels, getModelQuotas, getSubscriptionTier } from './cloudcode/index.js';
+import { REQUEST_BODY_LIMIT } from './constants.js';
+import { AccountManager } from './account-manager/index.js';
+import { logger } from './utils/logger.js';
+import usageStats from './modules/usage-stats.js';
 import { mountWebUI } from './webui/index.js';
 import { config } from './config.js';
+import { startBackgroundRefresh } from './utils/proactive-token-refresh.js';
+import TerminalLauncher from './launcher.js';
+
+// Import Route Handlers
+import messagesRouter from './routes/messages.js';
+import modelsRouter from './routes/models.js';
+import accountsRouter from './routes/accounts.js';
+import launcherRouter from './routes/launcher.js';
+import sessionsRouter from './routes/sessions.js';
+import usageRouter from './routes/usage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-import { forceRefresh } from './auth/token-extractor.js';
-import { REQUEST_BODY_LIMIT } from './constants.js';
-import { AccountManager } from './account-manager/index.js';
-import { formatDuration } from './utils/helpers.js';
-import { logger } from './utils/logger.js';
-import usageStats from './modules/usage-stats.js';
 
-// Security utilities (Remediation 2026-01)
-import { validateMessages } from './utils/validators.js';
-import { createSafeErrorResponse, sanitizeAccountForResponse, sanitizeErrorMessage } from './utils/error-sanitizer.js';
-import { setupGracefulShutdown, onShutdown } from './utils/graceful-shutdown.js';
-import { startBackgroundRefresh, stopBackgroundRefresh } from './utils/proactive-token-refresh.js';
-
-// CLI Launcher and Session Management
-import { detectCLI, launchCLI, getManualCommands } from './cli-launcher.js';
-import * as sessionManager from './session-manager.js';
-
-// WebSocket for live monitoring
-import { broadcastRequest, broadcastResponse, broadcastError } from './websocket-server.js';
-
-// Protocol Transcoders
-import { GeminiTranscoder } from './transcoders/gemini.js';
-import { OpenAITranscoder } from './transcoders/openai.js';
-
-// Gateway Handler
-import { handleLocalRequest } from './gateway.js';
-
-// Parse fallback flag directly from command line args to avoid circular dependency
+// Constants
 const args = process.argv.slice(2);
 const FALLBACK_ENABLED = args.includes('--fallback') || process.env.FALLBACK === 'true';
 
 const app = express();
-
-// Initialize account manager (will be fully initialized on first request or startup)
 const accountManager = new AccountManager();
 
-// Track initialization status
+// Initialization state
 let isInitialized = false;
-let initError = null;
 let initPromise = null;
 
 /**
- * Ensure account manager is initialized (with race condition protection)
+ * Middleware: Ensure account manager is initialized
  */
-async function ensureInitialized() {
-    if (isInitialized) return;
-
-    // If initialization is already in progress, wait for it
-    if (initPromise) return initPromise;
+async function ensureInitialized(req, res, next) {
+    if (isInitialized) return next();
+    if (initPromise) {
+        await initPromise;
+        return next();
+    }
 
     initPromise = (async () => {
         try {
@@ -77,1019 +56,83 @@ async function ensureInitialized() {
             isInitialized = true;
             const status = accountManager.getStatus();
             logger.success(`[Server] Account pool initialized: ${status.summary}`);
-
-            // Start background token refresh (Remediation 2026-01)
-            // Proactively refreshes tokens before they expire to prevent mid-stream failures
             startBackgroundRefresh(accountManager);
-            logger.info('[Server] Background token refresh monitoring started');
         } catch (error) {
-            initError = error;
-            initPromise = null; // Allow retry on failure
-            logger.error('[Server] Failed to initialize account manager:', error.message);
+            initPromise = null;
+            logger.error('[Server] Initialization failed:', error.message);
             throw error;
         }
     })();
 
-    return initPromise;
+    await initPromise;
+    next();
 }
 
-// Middleware
+/**
+ * Middleware: Model Mapping
+ */
+function modelMappingMiddleware(req, res, next) {
+    if (req.body && req.body.model) {
+        const modelMapping = config.modelMapping || {};
+        if (modelMapping[req.body.model]?.mapping) {
+            const original = req.body.model;
+            req.body.model = modelMapping[original].mapping;
+            logger.debug(`[Mapping] ${original} -> ${req.body.model}`);
+        }
+    }
+    next();
+}
+
+// === Global Middleware ===
 app.use(cors());
 app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
 
-// Security headers (Remediation 2026-01)
-// These provide basic protection against common web vulnerabilities
+// Security headers
 app.use((req, res, next) => {
-    // Prevent clickjacking
     res.setHeader('X-Frame-Options', 'DENY');
-    // Prevent MIME-type sniffing
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    // Enable XSS filter in older browsers
     res.setHeader('X-XSS-Protection', '1; mode=block');
-    // Basic Content Security Policy
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'");
-    // Referrer policy
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    // Permissions policy (formerly Feature-Policy)
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     next();
 });
 
-// Setup usage statistics middleware
 usageStats.setupMiddleware(app);
-
-// Mount WebUI (optional web interface for account management)
 mountWebUI(app, __dirname, accountManager);
 
-/**
- * Parse error message to extract error type, status code, and user-friendly message
- */
-function parseError(error) {
-    let errorType = 'api_error';
-    let statusCode = 500;
-    let errorMessage = error.message;
-
-    if (error.message.includes('401') || error.message.includes('UNAUTHENTICATED')) {
-        errorType = 'authentication_error';
-        statusCode = 401;
-        errorMessage = 'Authentication failed. Make sure Antigravity is running with a valid token.';
-    } else if (error.message.includes('429') || error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('QUOTA_EXHAUSTED')) {
-        errorType = 'invalid_request_error';  // Use invalid_request_error to force client to purge/stop
-        statusCode = 400;  // Use 400 to ensure client does not retry (429 and 529 trigger retries)
-
-        // Try to extract the quota reset time from the error
-        const resetMatch = error.message.match(/quota will reset after ([\dh\dm\ds]+)/i);
-        // Try to extract model from our error format "Rate limited on <model>" or JSON format
-        const modelMatch = error.message.match(/Rate limited on ([^.]+)\./) || error.message.match(/"model":\s*"([^"]+)"/);
-        const model = modelMatch ? modelMatch[1] : 'the model';
-
-        if (resetMatch) {
-            errorMessage = `You have exhausted your capacity on ${model}. Quota will reset after ${resetMatch[1]}.`;
-        } else {
-            errorMessage = `You have exhausted your capacity on ${model}. Please wait for your quota to reset.`;
-        }
-    } else if (error.message.includes('invalid_request_error') || error.message.includes('INVALID_ARGUMENT')) {
-        errorType = 'invalid_request_error';
-        statusCode = 400;
-        const msgMatch = error.message.match(/"message":"([^"]+)"/);
-        if (msgMatch) errorMessage = msgMatch[1];
-    } else if (error.message.includes('All endpoints failed')) {
-        errorType = 'api_error';
-        statusCode = 503;
-        errorMessage = 'Unable to connect to Claude API. Check that Antigravity is running.';
-    } else if (error.message.includes('PERMISSION_DENIED')) {
-        errorType = 'permission_error';
-        statusCode = 403;
-        errorMessage = 'Permission denied. Check your Antigravity license.';
-    }
-
-    return { errorType, statusCode, errorMessage };
-}
-
-// Request logging middleware
-app.use((req, res, next) => {
-    // Skip logging for event logging batch unless in debug mode
-    if (req.path === '/api/event_logging/batch') {
-        if (logger.isDebugEnabled) {
-            logger.debug(`[${req.method}] ${req.path}`);
-        }
-    } else {
-        logger.info(`[${req.method}] ${req.path}`);
-    }
-    next();
+// === Terminal Launcher ===
+const launcher = new TerminalLauncher({
+    port: process.env.PORT || 8080,
+    defaultModel: 'claude-opus-4-5-thinking',
+    apiKey: 'dummy'
 });
 
-/**
- * Health check endpoint - Detailed status
- * Returns status of all accounts including rate limits and model quotas
- */
-app.get('/health', async (req, res) => {
-    try {
-        await ensureInitialized();
-        const start = Date.now();
-
-        // Get high-level status first
-        const status = accountManager.getStatus();
-        const allAccounts = accountManager.getAllAccounts();
-
-        // Fetch quotas for each account in parallel to get detailed model info
-        const accountDetails = await Promise.allSettled(
-            allAccounts.map(async (account) => {
-                // Check model-specific rate limits
-                const activeModelLimits = Object.entries(account.modelRateLimits || {})
-                    .filter(([_, limit]) => limit.isRateLimited && limit.resetTime > Date.now());
-                const isRateLimited = activeModelLimits.length > 0;
-                const soonestReset = activeModelLimits.length > 0
-                    ? Math.min(...activeModelLimits.map(([_, l]) => l.resetTime))
-                    : null;
-
-                const baseInfo = {
-                    email: account.email,
-                    lastUsed: account.lastUsed ? new Date(account.lastUsed).toISOString() : null,
-                    modelRateLimits: account.modelRateLimits || {},
-                    rateLimitCooldownRemaining: soonestReset ? Math.max(0, soonestReset - Date.now()) : 0
-                };
-
-                // Skip invalid accounts for quota check
-                if (account.isInvalid) {
-                    return {
-                        ...baseInfo,
-                        status: 'invalid',
-                        error: account.invalidReason,
-                        models: {}
-                    };
-                }
-
-                try {
-                    const token = await accountManager.getTokenForAccount(account);
-                    const quotas = await getModelQuotas(token);
-
-                    // Format quotas for readability
-                    const formattedQuotas = {};
-                    for (const [modelId, info] of Object.entries(quotas)) {
-                        formattedQuotas[modelId] = {
-                            remaining: info.remainingFraction !== null ? `${Math.round(info.remainingFraction * 100)}%` : 'N/A',
-                            remainingFraction: info.remainingFraction,
-                            resetTime: info.resetTime || null
-                        };
-                    }
-
-                    return {
-                        ...baseInfo,
-                        status: isRateLimited ? 'rate-limited' : 'ok',
-                        models: formattedQuotas
-                    };
-                } catch (error) {
-                    return {
-                        ...baseInfo,
-                        status: 'error',
-                        error: error.message,
-                        models: {}
-                    };
-                }
-            })
-        );
-
-        // Process results - sanitize account info for external consumption
-        const detailedAccounts = accountDetails.map((result, index) => {
-            const acc = allAccounts[index];
-            const baseData = result.status === 'fulfilled' ? result.value : {
-                email: acc.email,
-                status: 'error',
-                error: result.reason?.message || 'Unknown error',
-                modelRateLimits: acc.modelRateLimits || {}
-            };
-
-            // Sanitize account data - always mask emails in public /health endpoint
-            const sanitized = sanitizeAccountForResponse(acc, {
-                includeEmail: false, // Always mask for public endpoint
-                includeQuota: true
-            });
-            return {
-                ...baseData,
-                // Override email with sanitized version
-                email: sanitized.displayName,
-                id: sanitized.id
-            };
-        });
-
-        res.json({
-            status: 'ok',
-            timestamp: new Date().toISOString(),
-            latencyMs: Date.now() - start,
-            summary: status.summary,
-            counts: {
-                total: status.total,
-                available: status.available,
-                rateLimited: status.rateLimited,
-                invalid: status.invalid
-            },
-            accounts: detailedAccounts
-        });
-
-    } catch (error) {
-        logger.error('[API] Health check failed:', error);
-        const { statusCode, response } = createSafeErrorResponse(error);
-        res.status(statusCode).json(response);
-    }
-});
-
-/**
- * Account limits endpoint - fetch quota/limits for all accounts × all models
- * Returns a table showing remaining quota and reset time for each combination
- * Use ?format=table for ASCII table output, default is JSON
- */
-app.get('/account-limits', async (req, res) => {
-    try {
-        await ensureInitialized();
-        const allAccounts = accountManager.getAllAccounts();
-        const format = req.query.format || 'json';
-        const includeHistory = req.query.includeHistory === 'true';
-
-        // Fetch quotas for each account in parallel
-        const results = await Promise.allSettled(
-            allAccounts.map(async (account) => {
-                // Skip invalid accounts
-                if (account.isInvalid) {
-                    return {
-                        email: account.email,
-                        status: 'invalid',
-                        error: account.invalidReason,
-                        models: {}
-                    };
-                }
-
-                try {
-                    const token = await accountManager.getTokenForAccount(account);
-
-                    // Fetch both quotas and subscription tier in parallel
-                    const [quotas, subscription] = await Promise.all([
-                        getModelQuotas(token),
-                        getSubscriptionTier(token)
-                    ]);
-
-                    // Update account object with fresh data
-                    account.subscription = {
-                        tier: subscription.tier,
-                        projectId: subscription.projectId,
-                        detectedAt: Date.now()
-                    };
-                    account.quota = {
-                        models: quotas,
-                        lastChecked: Date.now()
-                    };
-
-                    // Save updated account data to disk (async, don't wait)
-                    accountManager.saveToDisk().catch(err => {
-                        logger.error('[Server] Failed to save account data:', err);
-                    });
-
-                    return {
-                        email: account.email,
-                        status: 'ok',
-                        subscription: account.subscription,
-                        models: quotas
-                    };
-                } catch (error) {
-                    return {
-                        email: account.email,
-                        status: 'error',
-                        error: error.message,
-                        subscription: account.subscription || { tier: 'unknown', projectId: null },
-                        models: {}
-                    };
-                }
-            })
-        );
-
-        // Process results
-        const accountLimits = results.map((result, index) => {
-            if (result.status === 'fulfilled') {
-                return result.value;
-            } else {
-                return {
-                    email: allAccounts[index].email,
-                    status: 'error',
-                    error: result.reason?.message || 'Unknown error',
-                    models: {}
-                };
-            }
-        });
-
-        // Collect all unique model IDs
-        const allModelIds = new Set();
-        for (const account of accountLimits) {
-            for (const modelId of Object.keys(account.models || {})) {
-                allModelIds.add(modelId);
-            }
-        }
-
-        const sortedModels = Array.from(allModelIds).sort();
-
-        // Return ASCII table format
-        if (format === 'table') {
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-
-            // Build table
-            const lines = [];
-            const timestamp = new Date().toLocaleString();
-            lines.push(`Account Limits (${timestamp})`);
-
-            // Get account status info
-            const status = accountManager.getStatus();
-            lines.push(`Accounts: ${status.total} total, ${status.available} available, ${status.rateLimited} rate-limited, ${status.invalid} invalid`);
-            lines.push('');
-
-            // Table 1: Account status
-            const accColWidth = 25;
-            const statusColWidth = 15;
-            const lastUsedColWidth = 25;
-            const resetColWidth = 25;
-
-            let accHeader = 'Account'.padEnd(accColWidth) + 'Status'.padEnd(statusColWidth) + 'Last Used'.padEnd(lastUsedColWidth) + 'Quota Reset';
-            lines.push(accHeader);
-            lines.push('─'.repeat(accColWidth + statusColWidth + lastUsedColWidth + resetColWidth));
-
-            for (const acc of status.accounts) {
-                const shortEmail = acc.email.split('@')[0].slice(0, 22);
-                const lastUsed = acc.lastUsed ? new Date(acc.lastUsed).toLocaleString() : 'never';
-
-                // Get status and error from accountLimits
-                const accLimit = accountLimits.find(a => a.email === acc.email);
-                let accStatus;
-                if (acc.isInvalid) {
-                    accStatus = 'invalid';
-                } else if (accLimit?.status === 'error') {
-                    accStatus = 'error';
-                } else {
-                    // Count exhausted models (0% or null remaining)
-                    const models = accLimit?.models || {};
-                    const modelCount = Object.keys(models).length;
-                    const exhaustedCount = Object.values(models).filter(
-                        q => q.remainingFraction === 0 || q.remainingFraction === null
-                    ).length;
-
-                    if (exhaustedCount === 0) {
-                        accStatus = 'ok';
-                    } else {
-                        accStatus = `(${exhaustedCount}/${modelCount}) limited`;
-                    }
-                }
-
-                // Get reset time from quota API
-                const claudeModel = sortedModels.find(m => m.includes('claude'));
-                const quota = claudeModel && accLimit?.models?.[claudeModel];
-                const resetTime = quota?.resetTime
-                    ? new Date(quota.resetTime).toLocaleString()
-                    : '-';
-
-                let row = shortEmail.padEnd(accColWidth) + accStatus.padEnd(statusColWidth) + lastUsed.padEnd(lastUsedColWidth) + resetTime;
-
-                // Add error on next line if present
-                if (accLimit?.error) {
-                    lines.push(row);
-                    lines.push('  └─ ' + accLimit.error);
-                } else {
-                    lines.push(row);
-                }
-            }
-            lines.push('');
-
-            // Calculate column widths - need more space for reset time info
-            const modelColWidth = Math.max(28, ...sortedModels.map(m => m.length)) + 2;
-            const accountColWidth = 30;
-
-            // Header row
-            let header = 'Model'.padEnd(modelColWidth);
-            for (const acc of accountLimits) {
-                const shortEmail = acc.email.split('@')[0].slice(0, 26);
-                header += shortEmail.padEnd(accountColWidth);
-            }
-            lines.push(header);
-            lines.push('─'.repeat(modelColWidth + accountLimits.length * accountColWidth));
-
-            // Data rows
-            for (const modelId of sortedModels) {
-                let row = modelId.padEnd(modelColWidth);
-                for (const acc of accountLimits) {
-                    const quota = acc.models?.[modelId];
-                    let cell;
-                    if (acc.status !== 'ok' && acc.status !== 'rate-limited') {
-                        cell = `[${acc.status}]`;
-                    } else if (!quota) {
-                        cell = '-';
-                    } else if (quota.remainingFraction === 0 || quota.remainingFraction === null) {
-                        // Show reset time for exhausted models
-                        if (quota.resetTime) {
-                            const resetMs = new Date(quota.resetTime).getTime() - Date.now();
-                            if (resetMs > 0) {
-                                cell = `0% (wait ${formatDuration(resetMs)})`;
-                            } else {
-                                cell = '0% (resetting...)';
-                            }
-                        } else {
-                            cell = '0% (exhausted)';
-                        }
-                    } else {
-                        const pct = Math.round(quota.remainingFraction * 100);
-                        cell = `${pct}%`;
-                    }
-                    row += cell.padEnd(accountColWidth);
-                }
-                lines.push(row);
-            }
-
-            return res.send(lines.join('\n'));
-        }
-
-        // Get account metadata from AccountManager
-        const accountStatus = accountManager.getStatus();
-        const accountMetadataMap = new Map(
-            accountStatus.accounts.map(a => [a.email, a])
-        );
-
-        // Build response data
-        const responseData = {
-            timestamp: new Date().toLocaleString(),
-            totalAccounts: allAccounts.length,
-            models: sortedModels,
-            modelConfig: config.modelMapping || {},
-            accounts: accountLimits.map(acc => {
-                // Merge quota data with account metadata
-                const metadata = accountMetadataMap.get(acc.email) || {};
-                return {
-                    email: acc.email,
-                    status: acc.status,
-                    error: acc.error || null,
-                    // Include metadata from AccountManager (WebUI needs these)
-                    source: metadata.source || 'unknown',
-                    enabled: metadata.enabled !== false,
-                    projectId: metadata.projectId || null,
-                    isInvalid: metadata.isInvalid || false,
-                    invalidReason: metadata.invalidReason || null,
-                    lastUsed: metadata.lastUsed || null,
-                    modelRateLimits: metadata.modelRateLimits || {},
-                    // Subscription data (new)
-                    subscription: acc.subscription || metadata.subscription || { tier: 'unknown', projectId: null },
-                    // Quota limits
-                    limits: Object.fromEntries(
-                        sortedModels.map(modelId => {
-                            const quota = acc.models?.[modelId];
-                            if (!quota) {
-                                return [modelId, null];
-                            }
-                            return [modelId, {
-                                remaining: quota.remainingFraction !== null
-                                    ? `${Math.round(quota.remainingFraction * 100)}%`
-                                    : 'N/A',
-                                remainingFraction: quota.remainingFraction,
-                                resetTime: quota.resetTime || null
-                            }];
-                        })
-                    )
-                };
-            })
-        };
-
-        // Optionally include usage history (for dashboard performance optimization)
-        if (includeHistory) {
-            responseData.history = usageStats.getHistory();
-        }
-
-        res.json(responseData);
-    } catch (error) {
-        res.status(500).json({
-            status: 'error',
-            error: error.message
-        });
-    }
-});
-
-/**
- * Force token refresh endpoint
- * Security: Token prefix no longer exposed in response
- * Remediation 2026-01: Now refreshes all OAuth accounts, not just legacy token
- */
-app.post('/refresh-token', async (req, res) => {
-    try {
-        await ensureInitialized();
-
-        // Clear all caches first
-        accountManager.clearTokenCache();
-        accountManager.clearProjectCache();
-
-        // Get all OAuth accounts
-        const allAccounts = accountManager.getAllAccounts();
-        const oauthAccounts = allAccounts.filter(a => a.source === 'oauth' && a.refreshToken);
-
-        let succeeded = 0;
-        let failed = 0;
-        const details = [];
-
-        if (oauthAccounts.length > 0) {
-            // Refresh all OAuth accounts in parallel
-            const results = await Promise.allSettled(
-                oauthAccounts.map(async (account) => {
-                    try {
-                        await accountManager.getTokenForAccount(account);
-                        return { email: account.email, status: 'ok' };
-                    } catch (error) {
-                        return { email: account.email, status: 'error', error: error.message };
-                    }
-                })
-            );
-
-            for (const result of results) {
-                if (result.status === 'fulfilled') {
-                    const r = result.value;
-                    if (r.status === 'ok') {
-                        succeeded++;
-                        details.push({ account: sanitizeAccountForResponse(oauthAccounts.find(a => a.email === r.email), { includeEmail: false }).displayName, status: 'refreshed' });
-                    } else {
-                        failed++;
-                        details.push({ account: sanitizeAccountForResponse(oauthAccounts.find(a => a.email === r.email), { includeEmail: false }).displayName, status: 'failed' });
-                    }
-                } else {
-                    failed++;
-                }
-            }
-        }
-
-        // Also refresh legacy Antigravity token if available
-        try {
-            await forceRefresh();
-            succeeded++;
-            details.push({ account: 'legacy', status: 'refreshed' });
-        } catch (legacyError) {
-            // Legacy token refresh is optional
-            logger.debug('[API] Legacy token refresh skipped:', legacyError.message);
-        }
-
-        logger.info(`[API] Token refresh complete: ${succeeded} succeeded, ${failed} failed`);
-
-        res.json({
-            status: succeeded > 0 ? 'ok' : 'error',
-            message: `Refreshed ${succeeded} accounts${failed > 0 ? `, ${failed} failed` : ''}`,
-            timestamp: new Date().toISOString(),
-            details: details.length > 0 ? details : undefined
-        });
-    } catch (error) {
-        const { statusCode, response } = createSafeErrorResponse(error);
-        res.status(statusCode).json(response);
-    }
-});
-
-/**
- * List models endpoint (OpenAI-compatible format)
- */
-app.get('/v1/models', async (req, res) => {
-    try {
-        await ensureInitialized();
-        const account = accountManager.pickNext();
-        if (!account) {
-            return res.status(503).json({
-                type: 'error',
-                error: {
-                    type: 'api_error',
-                    message: 'No accounts available'
-                }
-            });
-        }
-        const token = await accountManager.getTokenForAccount(account);
-        const models = await listModels(token);
-        res.json(models);
-    } catch (error) {
-        logger.error('[API] Error listing models:', error);
-        res.status(500).json({
-            type: 'error',
-            error: {
-                type: 'api_error',
-                message: error.message
-            }
-        });
-    }
-});
-
-/**
- * Count tokens endpoint (not supported)
- */
-app.post('/v1/messages/count_tokens', (req, res) => {
-    res.status(501).json({
-        type: 'error',
-        error: {
-            type: 'not_implemented',
-            message: 'Token counting is not implemented. Use /v1/messages with max_tokens or configure your client to skip token counting.'
-        }
-    });
-});
-
-/**
- * Main messages endpoint - Anthropic Messages API compatible
- */
-
-
-/**
- * Anthropic-compatible Messages API
- * POST /v1/messages
- */
-app.post('/v1/messages', async (req, res) => {
-    try {
-        // Ensure account manager is initialized
-        await ensureInitialized();
-
-        // === Gateway Routing (Local/External Agents) ===
-        // Route 'local-' and 'gemini-' models to the external gateway
-        const gwModel = req.body.model;
-        if (gwModel && (gwModel.startsWith('local-') || gwModel.startsWith('gemini-'))) {
-            return handleLocalRequest(req, res);
-        }
-
-        // === Model Mapping (must happen BEFORE validation) ===
-        // Apply model mapping to translate incoming model names to valid ones
-        if (req.body.model) {
-            const modelMapping = config.modelMapping || {};
-            if (modelMapping[req.body.model] && modelMapping[req.body.model].mapping) {
-                const originalModel = req.body.model;
-                req.body.model = modelMapping[req.body.model].mapping;
-                logger.info(`[Server] Mapping model ${originalModel} -> ${req.body.model}`);
-            }
-        }
-
-        // === Input Validation (Security Remediation 2026-01) ===
-        // Validates request structure, model whitelist, and blocks prototype pollution
-        const validation = validateMessages(req.body);
-        if (!validation.valid) {
-            logger.warn(`[API] Validation failed: ${validation.errors[0]}`);
-            return res.status(400).json({
-                type: 'error',
-                error: {
-                    type: 'invalid_request_error',
-                    message: validation.errors[0]
-                }
-            });
-        }
-
-        const {
-            model,
-            messages,
-            stream,
-            system,
-            max_tokens,
-            tools,
-            tool_choice,
-            thinking,
-            top_p,
-            top_k,
-            temperature
-        } = validation.data; // Use validated/sanitized data
-
-        const modelId = model || 'claude-3-5-sonnet-20241022';
-
-        // Optimistic Retry: If ALL accounts are rate-limited for this model, reset them to force a fresh check.
-        // If we have some available accounts, we try them first.
-        if (accountManager.isAllRateLimited(modelId)) {
-            logger.warn(`[Server] All accounts rate-limited for ${modelId}. Resetting state for optimistic retry.`);
-            accountManager.resetAllRateLimits();
-        }
-
-        // Build the request object
-        const request = {
-            model: modelId,
-            messages,
-            max_tokens: max_tokens || 4096,
-            stream,
-            system,
-            tools,
-            tool_choice,
-            thinking,
-            top_p,
-            top_k,
-            temperature
-        };
-
-        logger.info(`[API] Request for model: ${request.model}, stream: ${!!stream}`);
-
-        // === Session Tracking ===
-        const session = sessionManager.detectOrCreateSession(req);
-        sessionManager.updateSessionActivity(session.id, request.model);
-
-        // === WebSocket Broadcasting ===
-        broadcastRequest(request.model, '/v1/messages');
-
-        // Debug: Log message structure to diagnose tool_use/tool_result ordering
-        if (logger.isDebugEnabled) {
-            logger.debug('[API] Message structure:');
-            messages.forEach((msg, i) => {
-                const contentTypes = Array.isArray(msg.content)
-                    ? msg.content.map(c => c.type || 'text').join(', ')
-                    : (typeof msg.content === 'string' ? 'text' : 'unknown');
-                logger.debug(`  [${i}] ${msg.role}: ${contentTypes}`);
-            });
-        }
-
-        if (stream) {
-            // Handle streaming response
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            res.setHeader('X-Accel-Buffering', 'no');
-
-            // Flush headers immediately to start the stream
-            res.flushHeaders();
-
-            try {
-                // Use the streaming generator with account manager
-                for await (const event of sendMessageStream(request, accountManager, FALLBACK_ENABLED)) {
-                    res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-                    // Flush after each event for real-time streaming
-                    if (res.flush) res.flush();
-                }
-                res.end();
-
-                // Broadcast successful response
-                broadcastResponse(200, request.model);
-
-            } catch (streamError) {
-                logger.error('[API] Stream error:', streamError);
-
-                const { errorType, errorMessage } = parseError(streamError);
-
-                // Broadcast error
-                broadcastError(streamError, 'streaming');
-                sessionManager.recordSessionError(session.id, streamError);
-
-                res.write(`event: error\ndata: ${JSON.stringify({
-                    type: 'error',
-                    error: { type: errorType, message: errorMessage }
-                })}\n\n`);
-                res.end();
-            }
-
-        } else {
-            // Handle non-streaming response
-            const response = await sendMessage(request, accountManager, FALLBACK_ENABLED);
-            res.json(response);
-
-            // Broadcast successful response
-            broadcastResponse(200, request.model);
-        }
-
-    } catch (error) {
-        logger.error('[API] Error:', error);
-
-        let { errorType, statusCode, errorMessage } = parseError(error);
-
-        // For auth errors, try to refresh the failing account's token (Remediation 2026-01)
-        if (errorType === 'authentication_error') {
-            logger.warn('[API] Token authentication failed, attempting account refresh...');
-            try {
-                // Get all OAuth accounts that need refresh
-                const allAccounts = accountManager.getAllAccounts();
-                const oauthAccounts = allAccounts.filter(a => a.source === 'oauth' && a.refreshToken);
-
-                if (oauthAccounts.length > 0) {
-                    // Clear caches for all OAuth accounts
-                    for (const account of oauthAccounts) {
-                        accountManager.clearTokenCache(account.email);
-                        accountManager.clearProjectCache(account.email);
-                    }
-
-                    // Try to refresh each OAuth account
-                    const results = await Promise.allSettled(
-                        oauthAccounts.map(a => accountManager.getTokenForAccount(a))
-                    );
-
-                    const succeeded = results.filter(r => r.status === 'fulfilled').length;
-                    const failed = results.filter(r => r.status === 'rejected').length;
-
-                    if (succeeded > 0) {
-                        errorMessage = `Authentication refreshed (${succeeded}/${oauthAccounts.length} accounts). Please retry your request.`;
-                        logger.success(`[API] Refreshed ${succeeded} OAuth tokens`);
-                    } else {
-                        errorMessage = `All ${failed} accounts failed to refresh. Re-authentication required via 'npm run accounts'.`;
-                        logger.error(`[API] All ${failed} OAuth accounts failed to refresh`);
-                    }
-                } else {
-                    // Fall back to legacy Antigravity database token refresh
-                    await forceRefresh();
-                    errorMessage = 'Token was expired and has been refreshed. Please retry your request.';
-                }
-            } catch (refreshError) {
-                logger.error('[API] Token refresh failed:', refreshError.message);
-                errorMessage = 'Could not refresh token. Re-authentication required via \'npm run accounts\'.';
-            }
-        }
-
-        logger.warn(`[API] Returning error response: ${statusCode} ${errorType} - ${errorMessage}`);
-
-        // Broadcast error and record in session
-        broadcastError(error, errorType);
-
-        // session variable might be undefined if error occurred before session creation
-        // or if we are in the catch block where session is not in scope
-        // We attempt to retrieve it if possible, or skip recording if not available.
-        try {
-            // Note: The 'session' variable from try block is NOT available here due to block scoping.
-            // We can try to re-detect it or just skip.
-            // A better approach is to define 'let session = null;' outside the try block.
-            // For this quick fix, we'll check if we can access it (which we can't if it's let/const inside try)
-            // So we must move the declaration up.
-        } catch (e) {
-            // ignore
-        }
-        // Since we can't easily move the declaration without a larger refactor in this tool call,
-        // and 'session' is definitely not accessible here if defined with 'const' inside try,
-        // I will remove the reference to 'session' here and rely on the fact that if session was created,
-        // it's already in the manager. But we want to record the error.
-
-        // To fix this properly, I'll modify the catch block to NOT use 'session' directly,
-        // but try to look it up from request if possible.
-        const errorSession = sessionManager.getSessionByRequest(req);
-        if (errorSession) {
-            sessionManager.recordSessionError(errorSession.id, error);
-        }
-
-        // Check if headers have already been sent (for streaming that failed mid-way)
-        if (res.headersSent) {
-            logger.warn('[API] Headers already sent, writing error as SSE event');
-            res.write(`event: error\ndata: ${JSON.stringify({
-                type: 'error',
-                error: { type: errorType, message: errorMessage }
-            })}\n\n`);
-            res.end();
-        } else {
-            res.status(statusCode).json({
-                type: 'error',
-                error: {
-                    type: errorType,
-                    message: errorMessage
-                }
-            });
-        }
-    }
-});
-
-/**
- * CLI Launcher Endpoints
- */
-
-// Detect if Claude CLI is installed
-app.get('/cli/detect', async (req, res) => {
-    try {
-        const result = await detectCLI();
-        res.json(result);
-    } catch (error) {
-        logger.error('[API] CLI detection failed:', error);
-        res.status(500).json({
-            installed: false,
-            error: error.message
-        });
-    }
-});
-
-// Launch Claude CLI in new terminal
-app.post('/cli/launch', async (req, res) => {
-    try {
-        const port = req.body.port || 8080;
-        const result = await launchCLI(port);
-
-        // Create a new session
-        const session = sessionManager.createSession(req.body.name);
-
-        res.json({
-            ...result,
-            session: {
-                id: session.id,
-                name: session.name
-            }
-        });
-    } catch (error) {
-        logger.error('[API] CLI launch failed:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
-
-// Get manual setup commands
-app.get('/cli/commands', (req, res) => {
-    try {
-        const port = req.query.port || 8080;
-        const commands = getManualCommands(port);
-        res.json(commands);
-    } catch (error) {
-        logger.error('[API] Failed to get commands:', error);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
-
-/**
- * Session Management Endpoints
- */
-
-// Get all sessions
-app.get('/sessions', (req, res) => {
-    try {
-        const sessions = sessionManager.getAllSessions();
-        const stats = sessionManager.getSessionStats();
-        res.json({
-            sessions,
-            stats
-        });
-    } catch (error) {
-        logger.error('[API] Failed to get sessions:', error);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
-
-// Get specific session
-app.get('/sessions/:id', (req, res) => {
-    try {
-        const id = parseInt(req.params.id, 10);
-        const session = sessionManager.getSession(id);
-
-        if (!session) {
-            return res.status(404).json({
-                error: 'Session not found'
-            });
-        }
-
-        res.json(session);
-    } catch (error) {
-        logger.error('[API] Failed to get session:', error);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
-
-// Update session name
-app.patch('/sessions/:id', (req, res) => {
-    try {
-        const id = parseInt(req.params.id, 10);
-        const { name } = req.body;
-
-        if (!name) {
-            return res.status(400).json({
-                error: 'Name is required'
-            });
-        }
-
-        const session = sessionManager.updateSessionName(id, name);
-
-        if (!session) {
-            return res.status(404).json({
-                error: 'Session not found'
-            });
-        }
-
-        res.json(session);
-    } catch (error) {
-        logger.error('[API] Failed to update session:', error);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
-
-// Delete session
-app.delete('/sessions/:id', (req, res) => {
-    try {
-        const id = parseInt(req.params.id, 10);
-        const deleted = sessionManager.deleteSession(id);
-
-        if (!deleted) {
-            return res.status(404).json({
-                error: 'Session not found'
-            });
-        }
-
-        res.json({
-            success: true,
-            message: 'Session deleted'
-        });
-    } catch (error) {
-        logger.error('[API] Failed to delete session:', error);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
-
-/**
- * Catch-all for unsupported endpoints
- */
-usageStats.setupRoutes(app);
-
+// === Routes ===
+
+// Health Check (Lightweight)
+app.get('/health', (req, res) => res.json({ status: 'ok', version: '1.3.0' }));
+
+// Apply mapping and initialization only to relevant routes
+app.use('/v1', ensureInitialized, modelMappingMiddleware);
+
+// Anthropic API Routes
+app.use('/v1', messagesRouter(accountManager, FALLBACK_ENABLED));
+app.use('/v1', modelsRouter(accountManager));
+
+// Management Routes
+app.use('/api/launcher', ensureInitialized, launcherRouter(launcher));
+app.use('/api/sessions', ensureInitialized, sessionsRouter());
+app.use('/api/stats', usageRouter());
+app.use('/account', ensureInitialized, accountsRouter(accountManager));
+
+// Legacy compatibility redirects
+app.get('/account-limits', (req, res) => res.redirect(301, '/account/account-limits'));
+app.post('/refresh-token', (req, res) => res.redirect(307, '/account/refresh-token'));
+app.get('/sessions', (req, res) => res.redirect(301, '/api/sessions'));
+app.post('/api/launch', (req, res) => res.redirect(307, '/api/launcher/launch'));
+
+// Catch-all 404
 app.use('*', (req, res) => {
-    if (logger.isDebugEnabled) {
-        logger.debug(`[API] 404 Not Found: ${req.method} ${req.originalUrl}`);
-    }
     res.status(404).json({
         type: 'error',
         error: {

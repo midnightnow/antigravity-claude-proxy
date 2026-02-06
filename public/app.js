@@ -95,7 +95,7 @@ document.addEventListener('alpine:init', () => {
 
                 this.ws.onopen = () => {
                     console.log('[WebSocket] Connected');
-                    Alpine.store('global').connectionStatus = 'connected';
+                    Alpine.store('data').connectionStatus = 'connected';
                 };
 
                 this.ws.onmessage = (event) => {
@@ -103,8 +103,14 @@ document.addEventListener('alpine:init', () => {
                         const data = JSON.parse(event.data);
                         console.log('[WebSocket] Message:', data);
 
-                        // You can add live monitoring UI updates here
-                        // For now, just log to console
+                        // Add to live events
+                        const store = Alpine.store('global');
+                        if (store.liveEvents) {
+                            store.liveEvents.unshift(data);
+                            if (store.liveEvents.length > store.maxLiveEvents) {
+                                store.liveEvents.pop();
+                            }
+                        }
                     } catch (error) {
                         console.error('[WebSocket] Failed to parse message:', error);
                     }
@@ -112,17 +118,17 @@ document.addEventListener('alpine:init', () => {
 
                 this.ws.onerror = (error) => {
                     console.error('[WebSocket] Error:', error);
-                    Alpine.store('global').connectionStatus = 'disconnected';
+                    Alpine.store('data').connectionStatus = 'disconnected';
                 };
 
                 this.ws.onclose = () => {
                     console.log('[WebSocket] Disconnected, reconnecting in 5s...');
-                    Alpine.store('global').connectionStatus = 'connecting';
+                    Alpine.store('data').connectionStatus = 'connecting';
                     setTimeout(() => this.connectWebSocket(), 5000);
                 };
             } catch (error) {
                 console.error('[WebSocket] Failed to connect:', error);
-                Alpine.store('global').connectionStatus = 'disconnected';
+                Alpine.store('data').connectionStatus = 'disconnected';
             }
         },
 
@@ -132,19 +138,19 @@ document.addEventListener('alpine:init', () => {
         async launchCLI() {
             this.launching = true;
             try {
-                const response = await fetch('/cli/launch', {
+                // Default to Gemini 3.0 Flash as requested
+                const model = 'gemini-3.0-flash';
+
+                const response = await fetch('/api/launch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: `Session ${Date.now()}`,
-                        port: 8080
-                    })
+                    body: JSON.stringify({ model })
                 });
 
                 const data = await response.json();
 
                 if (data.success) {
-                    Alpine.store('global').showToast('Terminal launched successfully!', 'success');
+                    Alpine.store('global').showToast('🚀 Gemini 3.0 Flash Terminal Launched!', 'success');
                 } else {
                     Alpine.store('global').showToast(data.error || 'Failed to launch terminal', 'error');
                 }

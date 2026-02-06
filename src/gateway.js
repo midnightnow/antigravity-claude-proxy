@@ -1,29 +1,33 @@
 import { logger } from './utils/logger.js';
-// fetch is global in Node 18+
 import { OpenAITranscoder } from './transcoders/openai.js';
+import { Readable } from 'stream';
 
 /**
- * Handles requests to local/external OpenAI-compatible agents (LM Studio, Ollama, etc.)
+ * Handles requests to local/external agents (Gemini Cloud or Local OpenAI-compatible)
  */
 export async function handleLocalRequest(req, res) {
     const model = req.body.model;
-    const targetUrl = process.env.LOCAL_LLM_URL || 'http://localhost:1234/v1/chat/completions';
 
+    // === ROUTE: Local Agents (LM Studio/Ollama) ===
+    // All local-* model requests go here
+    return handleOpenAIProxyRequest(req, res);
+}
+
+/**
+ * Handle Local/OpenAI Proxy Requests
+ */
+async function handleOpenAIProxyRequest(req, res) {
+    const model = req.body.model;
+    const targetUrl = process.env.LOCAL_LLM_URL || 'http://localhost:1234/v1/chat/completions';
     logger.info(`[Gateway] Routing ${model} to Local Agent at ${targetUrl}`);
 
     try {
-        // Transcode Anthropic -> OpenAI
         const openAIBody = OpenAITranscoder.toOpenAI(req.body);
-
-        // Remove 'local-' prefix if the local server expects clean names, 
-        // or keep it if mapped. Usually local servers take the model name as is.
-        // openAIBody.model = openAIBody.model.replace('local-', ''); 
 
         const response = await fetch(targetUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                // Add Authorization if needed via env
                 ...(process.env.LOCAL_LLM_KEY ? { 'Authorization': `Bearer ${process.env.LOCAL_LLM_KEY}` } : {})
             },
             body: JSON.stringify(openAIBody)
@@ -34,76 +38,84 @@ export async function handleLocalRequest(req, res) {
             throw new Error(`Local Agent Error (${response.status}): ${errorText}`);
         }
 
-        // Handle Streaming
         if (req.body.stream) {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-
-            // Listen to data events
-            // Note: node-fetch body is a stream
-            const stream = response.body;
-
-            // We need to parse SSE chunks and transcode them back to Anthropic
-            // This is a simplified parser; for robust SSE, dedicated parsing is better.
-            stream.on('data', (chunk) => {
-                const lines = chunk.toString().split('\n');
-                for (const line of lines) {
-                    if (line.trim() === '' || line.trim() === 'data: [DONE]') continue;
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const dataStr = line.replace('data: ', '');
-                            const data = JSON.parse(dataStr);
-                            const anthropicChunk = OpenAITranscoder.fromOpenAIStream(data);
-
-                            if (anthropicChunk) {
-                                res.write(`event: ${anthropicChunk.type}\n`);
-                                res.write(`data: ${JSON.stringify(anthropicChunk)}\n\n`);
-                            }
-                        } catch (e) {
-                            // ignore parse errors for partial chunks
-                        }
-                    }
-                }
-            });
-
-            stream.on('end', () => {
-                res.write('event: message_stop\ndata: {"type": "message_stop"}\n\n');
-                res.end();
-            });
-
-            stream.on('error', (err) => {
-                logger.error('[Gateway] Stream error:', err);
-                res.end();
-            });
-
+            streamResponse(res, response.body, OpenAITranscoder.fromOpenAIStream, 'openai');
         } else {
-            // Non-streaming
             const data = await response.json();
-            // TODO: Transcode Response OpenAI -> Anthropic (Non-streaming)
-            // For now, assume CLI mostly uses streaming.
-            // Simplified fallback for non-streaming:
             const content = data.choices[0].message.content;
-            res.json({
-                id: data.id,
-                type: 'message',
-                role: 'assistant',
-                content: [{ type: 'text', text: content }],
-                model: model,
-                stop_reason: 'end_turn',
-                stop_sequence: null,
-                usage: { input_tokens: 0, output_tokens: 0 } // Placeholder
-            });
+            res.json(createAnthropicResponse(content, model));
         }
 
     } catch (error) {
-        logger.error('[Gateway] Request Failed:', error);
-        res.status(502).json({
-            type: 'error',
-            error: {
-                type: 'api_error',
-                message: `Gateway Error: ${error.message}`
-            }
-        });
+        handleError(res, error);
     }
+}
+
+// === Helpers ===
+
+function streamResponse(res, bodyStream, transcoderFn, type) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // We treat the stream as text chunks for simplicity in this proxy implementation.
+    // A production implementation would parse the JSON structure properly.
+    bodyStream.on('data', (chunk) => {
+        try {
+            const str = chunk.toString();
+
+            if (type === 'openai') {
+                const lines = str.split('\n');
+                for (const line of lines) {
+                    if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                        try {
+                            const json = JSON.parse(line.substring(6));
+                            const anthropicChunk = transcoderFn(json);
+                            if (anthropicChunk) {
+                                writeSSE(res, anthropicChunk);
+                            }
+                        } catch (e) { }
+                    }
+                }
+            }
+        } catch (e) {
+            logger.error('[Gateway] Stream parse error', e);
+        }
+    });
+
+    bodyStream.on('end', () => {
+        res.write('event: message_stop\ndata: {"type": "message_stop"}\n\n');
+        res.end();
+    });
+}
+
+function writeSSE(res, chunk) {
+    res.write(`event: ${chunk.type}\n`);
+    res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+}
+
+function createAnthropicResponse(content, model) {
+    return {
+        id: `msg_${Date.now()}`,
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: content }],
+        model: model,
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 0, output_tokens: 0 }
+    };
+}
+
+function handleError(res, error) {
+    logger.error(`[Gateway] Error: ${error.message}`);
+
+    // Antigravity rate limit errors are specific, but here we might get generic API errors
+    // We try to return a format Claude CLI respects.
+    res.status(502).json({
+        type: 'error',
+        error: {
+            type: 'api_error',
+            message: error.message
+        }
+    });
 }

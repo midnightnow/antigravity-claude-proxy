@@ -1,13 +1,11 @@
-# Claude Gateway ⛩️
+# Antigravity Claude Proxy
 
 > **The Universal AI Gateway for Claude Code CLI**
 > Connect *any* LLM — Antigravity, Gemini, Local Agents (LM Studio/Ollama), or OpenAI — directly to your Claude Code terminal.
 
-![Claude Gateway Dashboard](https://github.com/midnightnow/antigravity-claude-proxy/assets/placeholder/dashboard-v1.png)
+## 🚀 Why Antigravity Claude Proxy?
 
-## 🚀 Why Claude Gateway?
-
-Claude Code CLI is powerful, but it's locked to Anthropic's API. **Claude Gateway** breaks these chains.
+Claude Code CLI is powerful, but it's locked to Anthropic's API. **Antigravity Claude Proxy** breaks these chains.
 
 It acts as a **smart proxy** that sits between your terminal and the AI world, providing:
 
@@ -30,8 +28,8 @@ It acts as a **smart proxy** that sits between your terminal and the AI world, p
 
 ```bash
 # Clone the repository
-git clone https://github.com/midnightnow/claude-gateway.git
-cd claude-gateway
+git clone https://github.com/midnightnow/antigravity-claude-proxy.git
+cd antigravity-claude-proxy
 
 # Install dependencies
 npm install
@@ -76,14 +74,14 @@ Using a local bridge or compatible endpoint:
 
 ## ⛩️ Architecture: The Universal Translation Layer
 
-Claude Gateway implements a robust transcoding pipeline:
+Antigravity Claude Proxy implements a robust transcoding pipeline:
 
-1.  **Intercept**: The Gateway receives the strict Anthropic Messages API request from Claude CLI.
-2.  **Route**: Based on the model prefix (`local-`, `gemini-`, etc.), it selects the correct path.
+1.  **Intercept**: The proxy receives the strict Anthropic Messages API request from Claude CLI.
+2.  **Route**: Based on the model prefix (`local-`, `gemma-`), it routes to Local Agents; everything else (Claude, Gemini) goes to Antigravity.
 3.  **Transcode**: 
     *   **Anthropic -> OpenAI**: For local agents (messages structure conversion).
-    *   **Anthropic -> Google**: For Gemini (role & system prompt mapping).
-4.  **Forward**: Sends the payload to the destination (Antigravity Cloud, Localhost, or External API).
+    *   **Anthropic -> Google**: For Gemini (via Antigravity Cloud Code client).
+4.  **Forward**: Sends the payload to the destination (Antigravity Cloud or Localhost).
 5.  **Stream**: Converts the response stream back to Anthropic's SSE format in real-time.
 
 ---
