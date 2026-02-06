@@ -34,16 +34,71 @@ cd antigravity-claude-proxy
 # Install dependencies
 npm install
 
-# Start the Gateway
+# Start the proxy server
 npm start
 ```
 
-### 3. Launch Your First Session
+The server will start on **http://localhost:8080**
 
-1.  Open **http://localhost:8080** in your browser.
-2.  Click the **Launch** button (Run Terminal) in the top-right corner.
-3.  A new terminal window will appear with the **Antigravity Banner**.
-4.  You are now connected! 🎉
+### 3. Configure Accounts
+
+**Option A: Use Antigravity (Recommended)**
+The proxy will automatically extract credentials from your Antigravity installation if you have a chat panel open.
+
+**Option B: Add Google OAuth Accounts**
+```bash
+npm run accounts
+```
+Follow the interactive prompts to add Google accounts with Gemini Code Assist access.
+
+### 4. Connect Claude CLI
+
+Set environment variables to point Claude CLI to the proxy:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8080
+export ANTHROPIC_API_KEY=dummy
+
+# Launch Claude CLI
+claude
+```
+
+You're now connected! 🎉
+
+### 5. Optional: Web Dashboard
+
+Open **http://localhost:8080** in your browser to:
+- Monitor real-time API traffic
+- View session statistics
+- Launch new terminal sessions
+- Manage account quotas
+
+---
+
+## 🔧 Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Server port | `8080` |
+| `DEBUG` | Enable debug logging | `false` |
+| `FALLBACK` | Enable model fallback on quota exhaustion | `false` |
+| `LOCAL_LLM_URL` | Local OpenAI-compatible endpoint | `http://localhost:1234/v1/chat/completions` |
+| `LOCAL_LLM_KEY` | API key for local endpoint | *(none)* |
+
+### Model Mapping
+
+Edit `~/.config/antigravity-proxy/config.json` to map model names:
+
+```json
+{
+  "modelMapping": {
+    "claude-3-5-sonnet-20241022": { "mapping": "claude-sonnet-4-5-thinking" },
+    "claude-haiku-3-5-20241022": { "mapping": "gemini-pro" }
+  }
+}
+```
 
 ---
 
@@ -86,11 +141,73 @@ Antigravity Claude Proxy implements a robust transcoding pipeline:
 
 ---
 
-## 📊 Dashboard Features
+## ✨ Features
 
-*   **Live Traffic Monitor**: Watch requests and responses flow in real-time via WebSocket.
-*   **Session Management**: View, rename, and kill active CLI sessions.
-*   **One-Click Launcher**: Auto-generates the correct environment variables for your OS (macOS, Linux, Windows).
+### 🎯 Core Capabilities
+- **Multi-Account Support**: Rotate between multiple Google accounts for higher quotas
+- **Automatic Failover**: Seamlessly switch accounts when rate limits are hit
+- **Model Fallback**: Automatically fall back to alternative models on quota exhaustion
+- **Tool Usage**: Full support for function calling with local and cloud models
+- **Thinking Models**: Support for Claude and Gemini thinking/reasoning models
+- **Streaming**: Real-time SSE streaming for all model types
+
+### 📊 Dashboard Features
+- **Live Traffic Monitor**: Watch requests and responses flow in real-time via WebSocket
+- **Session Management**: View, rename, and kill active CLI sessions
+- **Account Quotas**: Track usage and remaining capacity per model
+- **One-Click Launcher**: Auto-generates the correct environment variables for your OS
+- **Usage Statistics**: Historical tracking of API calls and token consumption
+
+### 🔌 Supported Backends
+- **Antigravity Cloud Code**: Claude and Gemini models via Google's API
+- **Local Agents**: LM Studio, Ollama, or any OpenAI-compatible endpoint
+- **Direct Gemini**: Google Gemini models with thinking support
+
+---
+
+## 🐛 Troubleshooting
+
+### "Requested entity was not found" (404)
+**Cause**: Your Google account doesn't have Gemini Code Assist enabled.
+
+**Solution**: 
+1. Ensure you have access to Google Cloud Code Assist
+2. Try running `npm run accounts:verify` to check account status
+3. Add a different Google account with proper access
+
+### "Authentication failed"
+**Cause**: OAuth tokens expired or Antigravity not running.
+
+**Solution**:
+```bash
+# Refresh OAuth tokens
+npm run accounts
+
+# Or restart Antigravity and ensure a chat panel is open
+```
+
+### Local models not working
+**Cause**: Local LLM server not accessible.
+
+**Solution**:
+1. Verify your local server is running (e.g., LM Studio on port 1234)
+2. Set the correct endpoint:
+   ```bash
+   export LOCAL_LLM_URL=http://localhost:1234/v1/chat/completions
+   ```
+3. Use `local-` prefix: `/model local-llama-3`
+
+### Server won't start
+**Cause**: Port 8080 already in use.
+
+**Solution**:
+```bash
+# Use a different port
+PORT=3000 npm start
+
+# Or kill the process using port 8080
+lsof -ti:8080 | xargs kill -9
+```
 
 ---
 
@@ -106,4 +223,20 @@ We welcome contributions! Whether it's adding new transcoders (e.g., for Mistral
 
 ---
 
-*Built with ❤️ by the Antigravity Team*
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- Built on top of [Antigravity](https://cloud.google.com/code-assist) Cloud Code API
+- Inspired by the [Claude CLI](https://github.com/anthropics/anthropic-sdk-typescript) ecosystem
+- Thanks to the open-source community for LM Studio, Ollama, and other local LLM tools
+
+---
+
+**Questions or Issues?** Open an issue on [GitHub](https://github.com/midnightnow/antigravity-claude-proxy/issues)
+
+*Built with ❤️ for the AI development community*
