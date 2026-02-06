@@ -10,7 +10,14 @@ import { forceRefresh } from '../auth/token-extractor.js';
 const router = express.Router();
 
 /**
- * Parse error message to extract error type, status code, and user-friendly message
+ * Parse API error messages into user-friendly responses with appropriate HTTP status codes
+ * 
+ * @param {Error} error - The error object to parse
+ * @returns {{errorType: string, statusCode: number, errorMessage: string}} Parsed error details
+ * 
+ * @example
+ * const { errorType, statusCode, errorMessage } = parseError(new Error('401 UNAUTHENTICATED'));
+ * // Returns: { errorType: 'authentication_error', statusCode: 401, errorMessage: '...' }
  */
 function parseError(error) {
     let errorType = 'api_error';

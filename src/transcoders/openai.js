@@ -3,7 +3,30 @@
  */
 export class OpenAITranscoder {
     /**
-     * Converts Anthropic request body to OpenAI format
+     * Converts Anthropic Messages API request to OpenAI Chat Completions format
+     * 
+     * Handles:
+     * - System prompts
+     * - Multi-turn conversations with tool usage
+     * - Tool definitions and tool_choice mapping
+     * - Content arrays (text, tool_use, tool_result)
+     * 
+     * @param {Object} anthropicBody - Anthropic Messages API request body
+     * @param {string} anthropicBody.model - Model identifier
+     * @param {Array} anthropicBody.messages - Conversation messages
+     * @param {string} [anthropicBody.system] - System prompt
+     * @param {boolean} [anthropicBody.stream] - Enable streaming
+     * @param {number} [anthropicBody.max_tokens] - Maximum tokens to generate
+     * @param {Array} [anthropicBody.tools] - Tool definitions
+     * @param {Object} [anthropicBody.tool_choice] - Tool selection strategy
+     * @returns {Object} OpenAI Chat Completions request payload
+     * 
+     * @example
+     * const openaiRequest = OpenAITranscoder.toOpenAI({
+     *   model: 'gpt-4',
+     *   messages: [{ role: 'user', content: 'Hello' }],
+     *   stream: true
+     * });
      */
     static toOpenAI(anthropicBody) {
         const { messages, system, stream, model, temperature, max_tokens, stop_sequences, tools, tool_choice } = anthropicBody;
@@ -112,7 +135,24 @@ export class OpenAITranscoder {
     }
 
     /**
-     * Transforms an OpenAI streaming chunk back into an Anthropic SSE chunk
+     * Transforms OpenAI streaming chunk to Anthropic SSE event format
+     * 
+     * Converts OpenAI delta chunks into Anthropic's structured event stream:
+     * - Text deltas → content_block_delta with text_delta
+     * - Tool call starts → content_block_start with tool_use
+     * - Tool arguments → content_block_delta with input_json_delta
+     * 
+     * @param {Object} openaiChunk - OpenAI streaming chunk
+     * @param {Array} openaiChunk.choices - Array of choice objects
+     * @param {Object} openaiChunk.choices[].delta - Delta content
+     * @param {number} index - Content block index for Anthropic format
+     * @returns {Object|null} Anthropic SSE event object, or null if no relevant content
+     * 
+     * @example
+     * const anthropicEvent = OpenAITranscoder.fromOpenAIStream({
+     *   choices: [{ delta: { content: 'Hello' } }]
+     * }, 0);
+     * // Returns: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } }
      */
     static fromOpenAIStream(openaiChunk, index) {
         const delta = openaiChunk.choices?.[0]?.delta;

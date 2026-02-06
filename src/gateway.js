@@ -3,7 +3,14 @@ import { OpenAITranscoder } from './transcoders/openai.js';
 import { Readable } from 'stream';
 
 /**
- * Handles requests to local/external agents (Gemini Cloud or Local OpenAI-compatible)
+ * Route requests for local/external agents to the appropriate handler
+ * 
+ * Handles models with `local-*` or `gemma-*` prefixes by routing them to
+ * local OpenAI-compatible endpoints (LM Studio, Ollama, etc.)
+ * 
+ * @param {import('express').Request} req - Express request object with Anthropic-format body
+ * @param {import('express').Response} res - Express response object
+ * @returns {Promise<void>}
  */
 export async function handleLocalRequest(req, res) {
     const model = req.body.model;
@@ -14,7 +21,14 @@ export async function handleLocalRequest(req, res) {
 }
 
 /**
- * Handle Local/OpenAI Proxy Requests
+ * Proxy requests to local OpenAI-compatible endpoints
+ * 
+ * Transcodes Anthropic Messages API format to OpenAI Chat Completions format,
+ * forwards to local endpoint, and converts the response back to Anthropic format.
+ * 
+ * @param {import('express').Request} req - Express request object
+ * @param {import('express').Response} res - Express response object
+ * @returns {Promise<void>}
  */
 async function handleOpenAIProxyRequest(req, res) {
     const model = req.body.model;
