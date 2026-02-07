@@ -38,7 +38,7 @@ build/
 
 # Agent artifacts
 .agent/
-bullrider/
+# bullrider/ (Use specific ignores instead)
 
 # Development scripts
 launch.sh
