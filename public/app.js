@@ -150,7 +150,10 @@ document.addEventListener('alpine:init', () => {
                 const data = await response.json();
 
                 if (data.success) {
-                    Alpine.store('global').showToast('🚀 Gemini 3.0 Flash Terminal Launched!', 'success');
+                    const message = data.platform === 'bullrider'
+                        ? '🐂 Bullrider Session Spawned!'
+                        : '🚀 Terminal Launched!';
+                    Alpine.store('global').showToast(message, 'success');
                 } else {
                     Alpine.store('global').showToast(data.error || 'Failed to launch terminal', 'error');
                 }

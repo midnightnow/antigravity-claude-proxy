@@ -107,7 +107,23 @@ Edit `~/.config/antigravity-proxy/config.json` to map model names:
 ### 💎 Antigravity (Default)
 Use your Antigravity credits for premium models. The Gateway automatically maps CLI models to your plan:
 *   `claude-3-5-sonnet` → Use normally
-*   `claude-3-5-opus` → Use normally
+
+### 🐂 Bullrider (Recommended)
+Use the included **Bullrider** supervisor to run sessions in robust, detached terminals.
+
+1.  **Build Bullrider:**
+    ```bash
+    cd bullrider && go build -o bullrider main.go
+    ./bullrider
+    ```
+    *(Starts on port 9000)*
+
+2.  **Spawn a Session:**
+    ```bash
+    curl -X POST http://localhost:9000/api/sessions/spawn \
+      -H "Content-Type: application/json" \
+      -d '{ "model": "gemini-3.0-flash" }'
+    ```
 
 ### 🤖 Local Agents (LM Studio / Ollama)
 Run models on your own machine for free.

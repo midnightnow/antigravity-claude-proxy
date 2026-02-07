@@ -16,7 +16,18 @@ class TerminalLauncher {
         const platform = os.platform();
         const model = modelOverride || this.defaultModel;
 
-        // Validate CLI first
+        // Message Handling: Prioritize Bullrider (Canonical Supervisor)
+        const bullriderAvailable = await this.isBullriderAvailable();
+        if (bullriderAvailable) {
+            console.log('[Launcher] 🐂 Delegating launch to Bullrider...');
+            try {
+                return await this.spawnBullrider(model);
+            } catch (error) {
+                console.warn('[Launcher] Bullrider spawn failed, falling back to legacy:', error.message);
+            }
+        }
+
+        // Validate CLI for Legacy Fallback
         const cliInstalled = await this.validateClaudeCLI();
         if (!cliInstalled) {
             throw new Error('Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-cli');
@@ -38,6 +49,37 @@ class TerminalLauncher {
             return this._spawnLinux(commands);
         }
         throw new Error(`Platform ${platform} not supported`);
+    }
+
+    async isBullriderAvailable() {
+        try {
+            const response = await fetch('http://localhost:9000/health');
+            return response.ok;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    async spawnBullrider(model) {
+        const response = await fetch('http://localhost:9000/api/sessions/spawn', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                cwd: process.cwd(),
+                model: model
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Bullrider returned ${response.status}`);
+        }
+
+        const session = await response.json();
+        return {
+            success: true,
+            platform: 'bullrider',
+            session: session
+        };
     }
 
     _spawnMacOS(commands) {

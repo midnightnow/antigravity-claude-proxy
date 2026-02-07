@@ -49,63 +49,57 @@ npm run test:oauth         # OAuth no-browser mode
 
 ## Architecture
 
-**Request Flow:**
+**The Bullrider Stack (v2.0):**
+
 ```
-Claude Code CLI → Express Server (server.js) → CloudCode Client → Antigravity Cloud Code API
+┌─────────────────────┐
+│ Bullrider (Go)       │ Port 9000
+│ Process Supervisor   │
+└────────┬────────────┘
+         │ Spawns
+         ▼
+┌─────────────────────┐
+│ Claude Code CLI      │
+│ (Child Process)      │
+└────────┬────────────┘
+         │ HTTP /v1/messages
+         ▼
+┌─────────────────────┐
+│ Proxy Brain (Node)   │ Port 8080
+│ (Modular Routes)     │
+└────────┬────────────┘
+         │ HTTP (Cloud Code API)
+         ▼
+┌─────────────────────┐
+│ Antigravity Cloud    │
+└─────────────────────┘
 ```
 
 **Directory Structure:**
 
 ```
 src/
-├── index.js                    # Entry point
-├── server.js                   # Express server
-├── constants.js                # Configuration values
-├── errors.js                   # Custom error classes
-├── fallback-config.js          # Model fallback mappings and helpers
-│
+├── server.js                   # Express server (Main entry point)
+├── routes/                     # Modular Route Handlers
+│   ├── messages.js             # /v1/messages (Anthropic API)
+│   ├── models.js               # /v1/models
+│   ├── accounts.js             # /account/* endpoints
+│   ├── launcher.js             # /api/launcher/*
+│   ├── sessions.js             # /api/sessions/*
+│   └── usage.js                # /api/stats/*
 ├── cloudcode/                  # Cloud Code API client
 │   ├── index.js                # Public API exports
-│   ├── session-manager.js      # Session ID derivation for caching
-│   ├── rate-limit-parser.js    # Parse reset times from headers/errors
-│   ├── request-builder.js      # Build API request payloads
-│   ├── sse-parser.js           # Parse SSE for non-streaming
-│   ├── sse-streamer.js         # Stream SSE events in real-time
-│   ├── message-handler.js      # Non-streaming message handling
-│   ├── streaming-handler.js    # Streaming message handling
-│   └── model-api.js            # Model listing and quota APIs
-│
+│   └── ...
 ├── account-manager/            # Multi-account pool management
-│   ├── index.js                # AccountManager class facade
-│   ├── storage.js              # Config file I/O and persistence
-│   ├── selection.js            # Account picking (round-robin, sticky)
-│   ├── rate-limits.js          # Rate limit tracking and state
-│   └── credentials.js          # OAuth token and project handling
-│
 ├── auth/                       # Authentication
-│   ├── oauth.js                # Google OAuth with PKCE
-│   ├── token-extractor.js      # Legacy token extraction from DB
-│   └── database.js             # SQLite database access
-│
 ├── webui/                      # Web Management Interface
-│   └── index.js                # Express router and API endpoints
-│
-├── cli/                        # CLI tools
-│   └── accounts.js             # Account management CLI
-│
 ├── format/                     # Format conversion (Anthropic ↔ Google)
-│   ├── index.js                # Re-exports all converters
-│   ├── request-converter.js    # Anthropic → Google conversion
-│   ├── response-converter.js   # Google → Anthropic conversion
-│   ├── content-converter.js    # Message content conversion
-│   ├── schema-sanitizer.js     # JSON Schema cleaning for Gemini
-│   ├── thinking-utils.js       # Thinking block validation/recovery
-│   └── signature-cache.js      # Signature cache (tool_use + thinking signatures)
-│
 └── utils/                      # Utilities
-    ├── helpers.js              # formatDuration, sleep
-    ├── logger.js               # Structured logging
-    └── native-module-helper.js # Auto-rebuild for native modules
+
+bullrider/                      # Canonical Process Supervisor (Go)
+├── main.go                     # Go Source Code
+├── go.mod                      # Go Module Definition
+└── README.md                   # Bullrider Documentation
 ```
 
 **Frontend Structure (public/):**
