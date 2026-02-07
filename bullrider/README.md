@@ -42,6 +42,12 @@ List all active sessions.
 ### `DELETE /api/sessions/kill?id=<id>`
 Terminate a session by ID.
 
+### `POST /api/sessions/input`
+Send raw input to a session's PTY (e.g., to bypass prompts).
+- **Body**:
+  - `id` (string): Session ID
+  - `data` (string): Raw input (e.g., `"\r"` for Enter)
+
 ### `GET /health`
 Health check endpoint. Returns "OK".
 

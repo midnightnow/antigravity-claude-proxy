@@ -242,6 +242,49 @@ func (m *Manifold) handleKillSession(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(fmt.Sprintf("Session %s killed", id)))
 }
 
+// WriteInput sends raw bytes to the session PTY stdin
+func (m *Manifold) WriteInput(id string, data []byte) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.sessions[id]
+	if !exists {
+		return fmt.Errorf("session not found")
+	}
+
+	_, err := session.pty.Write(data)
+	return err
+}
+
+func (m *Manifold) handleInputSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID   string `json:"id"`
+		Data string `json:"data"` 
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Append newline if likely intended (optional, but convenient for CLI commands)
+	// For raw input, we should probably send exactly what is requested.
+	// Let's assume raw string is sent.
+	
+	if err := m.WriteInput(req.ID, []byte(req.Data)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Input sent"))
+}
+
 func main() {
 	// Configuration from Environment
 	port := os.Getenv("BULLRIDER_PORT")
@@ -272,11 +315,11 @@ func main() {
 	http.HandleFunc("/api/sessions", manifold.handleListSessions)
 	http.HandleFunc("/api/sessions/spawn", manifold.handleSpawnSession)
 	http.HandleFunc("/api/sessions/kill", manifold.handleKillSession)
-	// http.HandleFunc("/api/sessions/attach", manifold.handleAttachSession) // Reserved for Phase 2
+	http.HandleFunc("/api/sessions/input", manifold.handleInputSession)
 
 	// Start Server
 	fmt.Println("╔═══════════════════════════════════════════════╗")
-	fmt.Printf("║        CLAUDE BULLRIDER v1.1                 ║\n")
+	fmt.Printf("║        CLAUDE BULLRIDER v1.2                 ║\n")
 	fmt.Println("╠═══════════════════════════════════════════════╣")
 	fmt.Printf("║  Manifold Server: http://localhost:%s       ║\n", port)
 	fmt.Printf("║  Proxy Target:    %s       ║\n", proxyURL)
