@@ -49,3 +49,4 @@ bin/clyde
 *.tmp
 *.swp
 *~
+bullrider/bullrider-darwin-arm64
