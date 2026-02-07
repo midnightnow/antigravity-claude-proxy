@@ -111,6 +111,12 @@ Use your Antigravity credits for premium models. The Gateway automatically maps 
 ### 🐂 Bullrider (Recommended)
 Use the included **Bullrider** supervisor to run sessions in robust, detached terminals.
 
+**Start Everything:**
+```bash
+./start-all.sh
+```
+
+**Manual Setup:**
 1.  **Build Bullrider:**
     ```bash
     cd bullrider && go build -o bullrider main.go
